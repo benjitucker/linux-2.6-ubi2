@@ -114,6 +114,7 @@ config MTD_SST25L
 
 config MTD_SLRAM
 	tristate "Uncached system RAM"
+	depends on HAS_IOMEM
 	help
 	  If your CPU cannot cache all of the physical memory in your machine,
 	  you can still use it for storage or swap by using this driver to
@@ -121,6 +122,7 @@ config MTD_SLRAM
 
 config MTD_PHRAM
 	tristate "Physical system RAM"
+	depends on HAS_IOMEM
 	help
 	  This is a re-implementation of the slram driver above.
 
@@ -187,7 +189,9 @@ config MTD_BLOCK2MTD
 	  Testing MTD users (eg JFFS2) on large media and media that might
 	  be removed during a write (using the floppy drive).
 
+if HAS_IOMEM
 comment "Disk-On-Chip Device Drivers"
+endif
 
 config MTD_DOC2000
 	tristate "M-Systems Disk-On-Chip 2000 and Millennium (DEPRECATED)"

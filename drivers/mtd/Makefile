@@ -30,6 +30,9 @@ obj-$(CONFIG_MTD_SWAP)		+= mtdswap.o
 nftl-objs		:= nftlcore.o nftlmount.o
 inftl-objs		:= inftlcore.o inftlmount.o
 
-obj-y		+= chips/ lpddr/ maps/ devices/ nand/ onenand/ tests/
+obj-y		+= devices/
+ifdef CONFIG_HAS_IOMEM
+obj-y		+= chips/ lpddr/ maps/ nand/ onenand/ tests/
+endif
 
 obj-$(CONFIG_MTD_UBI)		+= ubi/

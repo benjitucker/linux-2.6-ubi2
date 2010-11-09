@@ -28,9 +28,7 @@ source "drivers/scsi/Kconfig"
 
 source "drivers/md/Kconfig"
 
-if BROKEN
-	source "drivers/mtd/Kconfig"
-endif
+source "drivers/mtd/Kconfig"
 
 source "drivers/leds/Kconfig"
 

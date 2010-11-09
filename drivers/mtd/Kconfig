@@ -319,11 +319,14 @@ config MTD_SWAP
 
        source "drivers/mtd/chips/Kconfig"
        source "drivers/mtd/maps/Kconfig"
+endif
 
 source "drivers/mtd/devices/Kconfig"
 
+if HAS_IOMEM
        source "drivers/mtd/nand/Kconfig"
        source "drivers/mtd/onenand/Kconfig"
+endif
 
 source "drivers/mtd/lpddr/Kconfig"
 

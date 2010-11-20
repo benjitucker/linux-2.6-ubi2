@@ -330,17 +330,13 @@ config MTD_OOPS
 	  where x is the MTD device number to use.
 
 
-if HAS_IOMEM
        source "drivers/mtd/chips/Kconfig"
        source "drivers/mtd/maps/Kconfig"
-endif
 
 source "drivers/mtd/devices/Kconfig"
 
-if HAS_IOMEM
        source "drivers/mtd/nand/Kconfig"
        source "drivers/mtd/onenand/Kconfig"
-endif
 
 source "drivers/mtd/lpddr/Kconfig"
 

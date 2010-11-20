@@ -14,7 +14,8 @@ extern void __delay(unsigned long loops);
 
 /* It appears that ndelay is not used at all for UML, and has never been
  * implemented. */
-extern void __unimplemented_ndelay(void);
-#define ndelay(n) __unimplemented_ndelay()
+//extern void __unimplemented_ndelay(void);
+//#define ndelay(n) __unimplemented_ndelay()
+#define ndelay(n)		do { } while (0)
 
 #endif

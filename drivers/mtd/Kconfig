@@ -317,17 +317,13 @@ config MTD_SWAP
 	  OOB.
 
 
-if HAS_IOMEM
        source "drivers/mtd/chips/Kconfig"
        source "drivers/mtd/maps/Kconfig"
-endif
 
 source "drivers/mtd/devices/Kconfig"
 
-if HAS_IOMEM
        source "drivers/mtd/nand/Kconfig"
        source "drivers/mtd/onenand/Kconfig"
-endif
 
 source "drivers/mtd/lpddr/Kconfig"
 

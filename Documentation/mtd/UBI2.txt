@@ -1,0 +1,336 @@
+
+//:ts=4
+
+Design Goals 
+
+- Fast (zero?) attach time
+- Safe with power outage
+
+
+Physical Volume structure
+=========================
+
+ 
+  -----------------------   ^
+  |                     |   |
+  |  -----------------  |   |
+  |  |      PEB 0    |  |   |
+  |  -----------------  |   |
+  |  |      PEB 1    |  |   |
+  |  -----------------  |   |
+  |          .          |   90%
+  |          .          |   |
+  |          .          |   |
+  |  -----------------  |   |
+  |  |      PEB N    |  |   |
+  |  -----------------  |   v
+  -----------------------
+  |                     |   ^
+  |  -----------------  |   |
+  |  | Free PEB 0    |  |   |
+  |  -----------------  |   |
+  |  | Free PEB 1    |  |   |
+  |  -----------------  |   |
+  |          .          |   10%
+  |          .          |   |
+  |          .          |   |
+  |  -----------------  |   |
+  |  | Free PEB N    |  |   |
+  |  -----------------  |   v
+  -----------------------
+
+Alternative idea: Unchained free PEB
+------------------------------------
+
+In this scheme, instead of maintaining lists of free PEBs, PEBs that are free
+are simply those that are fully erased. Free PEBs can be identified by empty
+LLP array.
+    - To free up (garbage collect GC) free PEBs:
+        - reduce the PEB chain to length 1
+            - LLP update when all LLP array elements have been used problem???
+        - Follow PEB chain and erase them.
+	    - Once erased, the free PEB's active LLP header must be restored
+	    	if the PEB itself is the head of a list.
+	    - ...and how do we do that safely????
+        - Cache the index's of the newly erased PEBs
+        - Breaks the update partner rule??
+
+    - Background garbage collection thread would seek out free PEBs and cache
+        their index's
+
+    - At initial mount time, initial writes would be slow if the GC thread
+        had not found free PEBs (but still zero mount time)
+
+    - To make the FLASH completely empty, simple erase all of it!
+	- However the problem is may have to write the LLP header for the 
+	  start of the chain before we write the body data payload and
+	  if the LLP header array is at the end of the PEB then we will not
+	  be writing the PEB sequentially (bad for MLC nand)
+	- Too avoid the situation we have two LLP header arrays, one at the
+	  start for use when the PEB is free, and the other end one used when
+	  the PEB is used.
+
+    - We do not retain any information on the age of PEB (so, who cares)]
+
+    - Need to make sure we check when PEBs begin to fail
+        - > threshold bit errors (75% of ECC correction capability)
+        - Mark bad PEBs
+
+    - Power outage during GC leaves dangling chain problem
+        - Make sure the GC thread has the whole chain LLP headers in cache
+            before attempting to reclaim the PEBs
+        - Minimise the chances by:
+            - 1. Erasing the PEBs reclamed in reverse order, starting at the 
+                end of the list.
+            - 2. GC background thread lazily walks through flash reading
+                chains (using cache if possible). If is finds a chain that
+                terminates in an erased (free) PEB then the whole chain
+                should be free.
+        - However if the outage occures inbetween 1 and 2 above, i.e. the
+            PEB chain does not end in an empty (free) PEB then (2) above
+            will not recognise the chain as free.
+            - Do not worry. The chances of this are small and eventually
+                the PEB at the end of the free chain will be erased and 
+                the GC thread can then find the free PEB list.
+            - So if this occurs the free PEB pool will be reduced in size
+                for a while (which will itself trigger more GC), but the
+                situation will recover.
+
+
+        
+
+
+
+Physical Erase Block (PEB) Structure
+====================================
+PEB
+    -------------------------	^
+ 0  |      LLP Header 0     |	|
+    -------------------------	|
+ 1  |      LLP Header 1     |	|
+    -------------------------	|
+                .
+                .		First sub-pages (min IO unit)
+                .
+    -------------------------	|
+ N  |      LLP Header N     |	v
+    -------------------------	 
+    |                       |	^
+    |                       |	|
+    |                       |	|
+    |  Erase Block Payload  |	|
+    |                       |	|
+    |                       |	|
+    |                       |	v
+    -------------------------	 
+    |      LLP Header N+1   |	^
+    -------------------------	|
+    |      LLP Header N+2   |	|
+    -------------------------	|
+                .
+                .		Last sub-pages (min IO unit)
+                .
+    -------------------------	|
+    |      LLP Header 2N    |	|
+    -------------------------	v
+
+PROBLEM: We have to write whole sub-page at once???
+SOLUTION: Use whole sub page for LLP Header
+ - This is a massive overhead and reduces the storage efficiency. Say we want
+	8 LLP headers, typically there may only be 64 sub-pages which means 87%
+	efficiency 
+ - Make the number of LLP headers in the array tunable. 
+ - Also use the spare space in the IO unit for:
+	- VID & EC headers from UBI1
+	- LLP Header copies for the other elements in the list following the
+	  LEB, if known (and will only be known if the LLP header that is the
+  	  head of another list is update, for example when the other list is
+	  GC'ed and the LLP header is updated to reduce the other list length 
+	  to 1.
+	
+
+LLP Header
+==========
+
+    -------------------------
+    |       UPP, USN        |
+    |       UPP-CRC         |
+    -------------------------
+    |       LLP, NLP        |
+    |      Free, Bad        |
+    |       LLP-CRC         |
+    -------------------------
+    |      Old LLP Flag     |
+    -------------------------
+
+
+LLP - Linked List Pointer
+=========================
+
+Physical Erase Block (PEB) number of the first item in the linked list, where
+the block at the end of the list holds the data payload for the Logical 
+Erase Block (LEB) where the LEB number is equal the this PEB number.
+
+e.g. LEB number 10 is mapped to PEB 22
+
+        PEB num 10                 
+        -----------               
+        | Payload |                PEB 22:
+        |   LLP   | --> (list) --> -----------
+        -----------                | Payload |
+                                   |   LLP   | --> (null)
+                                   -----------
+
+
+Erase Block Index of the 
+
+
+NLP - Next List Pointer
+=======================
+
+The NLP links the list of PEBs between the PEB head (at PEB number == 
+LEB number) and the end of the list where the data payload for the LEB
+is found.
+
+e.g. Expand our previous example where LEB 10 is mapped to PEB 22 but this
+time we see that the list runs through LEB 99
+
+
+        PEB num 10                 
+        -----------               
+        | Payload |     PEB 99:
+        |   LLP   | --> -----------
+        |   NLP   |     | Payload |
+        -----------     |   LLP   |     PEB 22: 
+                        |   NLP   | --> -----------
+                        -----------     | Payload |
+                                        |   LLP   |
+                                        |   NLP   |
+                                        -----------
+
+Obviously the chain can be any length (although steps are taken to)
+minimise the chain lengths to avoid having to read many pages when
+first discovering the PEB mapped to a particular LEB.
+
+
+LLP-CRC
+=======
+
+Holds a checksum of the LLP and NLP parts of the LLP Header.
+
+
+Old LLP Flag
+============
+
+This flag is 1 (the flash erased state) when the LLP Header is in use and 0
+when the header is an old header and no longer used.
+
+In order to allow the LLP/NLP pointers of PEB's to be updated without having to 
+erase the block, space for new LLP Headers is provided in every PEB.
+
+When erased, all the Old LLP flags will be set to 1 (erased state). Following
+erasure the first LLP Header is written. When an update to the first LLP is
+required, the first LLP is marked as Old and the second LLP header is written
+with the new information and so on.
+
+When the last LLP header is used, the software will look to move the entire 
+PEB page to a new empty PEB, which will have a new set of empty LLP Headers. In 
+this case, the entire PEB contents including payload must be copied to the 
+new empty PEB.
+
+When following the list of PEBs to find the end element (the PEB containing the
+LEB data), the software must read the array of LLP Headers from each PEB it 
+encounters. Only the first LLP in the array which is not old, and has a valid
+LLP-CRC, can be used for valid data.
+
+If the LLP-CRC check fails, then the previous LLP Header in the array will be
+used for valid data.
+TODO - what if this is the first LLP Header in the array??
+
+
+UPP - Update Partner Pointer
+============================
+
+The UPP and USN are used together to provide protection against power outage
+at inconvenient times, more specifically when LLP Headers are updated.
+
+Each atomic change for the lists involves updating two LLP headers, the first 
+update sets an NLP to the new item on the list and the second updates the new 
+list item. The two PEBs containing the LLP Headers updated are called
+Update Partners and their PEB numbers are set in the UPP.
+
+When ever an update to a LLP Header is made, after the previous LLP Header in
+the array is marked as Old, the UPP number is written. Higher level software
+which is managing PEB list manipulation will know the two partners being
+updated.
+
+This helps with the detection and correction of the situation where a power
+outage occurred in between the update of the LLP Headers of the two partners.
+
+
+USN - Update Serial Number
+==========================
+
+The USN is a global incrementing number that counts each update to a pair of
+LLP headers (which changes the flash from one valid state to another).
+
+When updating an LLP Header, after the UPP is written, the USN is also written.
+On completion of the update, the USN of both partners shall match.
+
+When software follows the list of PEBs to find the end, as previously explained,
+in addition to checking the LLP-CRC's, software will also check the USN of
+the update partner. If it finds that the partner USN does not match then the
+software will discard the particular LLP Header and revert to the previous one
+in the list.  TODO - think this through??
+	- This breaks down when the partner is unmapped and erased.
+
+One optimisation here is that if the USN is less than the highest USN 
+encountered so far, then it must be correct as only the last USN will be
+(possibly) corrupted by power outage.
+
+
+UPP-CRC
+=======
+
+TODO
+
+
+Free PEBs
+=========
+
+TODO
+
+Torturing
+=========
+
+TODO - As UBI1 (torture_peb())
+
+Auto-resize
+===========
+
+TODO - As per UBI1
+
+Bad PEBs
+========
+
+The Bad flag in the active LLP Header indicates that the PEB is worn out and 
+should not be used. PEBs are worn out when they have almost reached or passed 
+their limit of error correction. 
+
+Unfortunately, this design still needs to rely on PEBs after they have gone bad
+as they will be used to read the LLP pointer to the list. So the LLP header
+contents of the bad PEB will be read one time after each attach. Subsequent
+reads will be satisfies by LLP Header cache.
+
+To avoid further writes to the bad PEB, they are treaded differently that good
+PEBs:
+    - When choosing a new PEB to attach to a list (changes to LEB), the software
+        will not choose a bad one.
+    - Related to Unchained free PEB: When garbadge collecting free PEBs, the
+        software will shorten the list to two elements plus the number of
+        bad PEBs at the start of the list. This way the operation to shorten
+        the list (which involves writing the PEB, LLP) will not be writing
+        to the bad PEB.
+        TODO - example:
+
+

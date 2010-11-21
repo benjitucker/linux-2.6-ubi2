@@ -148,7 +148,27 @@ SOLUTION: Use whole sub page for LLP Header
 	  GC'ed and the LLP header is updated to reduce the other list length 
 	  to 1.
 	
+PROBLEM: The API allows *not* writing all sub-pages of the LEB at once.
+	This means that we cannot write the LLP header at the end of the PEB because 
+	we also want to write the PEB sequentually (necessary for MLC).
+SOLUTION1: Interleve sub pages in the PEB between Payload type and LLP header type.
+PROBLEMS: 
+	1. Cannot set the usable payload size of the LEB
+	2. When searching for the the latset (active) LLP header, we (possible) have
+		to do lots of reading of the sub-pages, we do not know the position of
+		the last (active) LLP header.
+SOLUTION2: Put a LLP Header at the beginning of every sub-page and the remaining page
+		holds data payload.
+PROBLEMS:
+	1. The size of the sub-page (min IO size) reported to higher levels will not 
+		be ^2, unless we use half of all sub-pages for LLP header but this 
+		will result in 50% storage efficiency. 
+		Will non ^2 IO size be a problem???
+	2. We still do not know the position of the active LLP header, without scanning
+		the PEB.
 
+OLUTION3: Somwhow (not sure how this would work) treat the sub-block more like the 
+	PEB????
 LLP Header
 ==========
 

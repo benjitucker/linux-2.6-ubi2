@@ -102,36 +102,55 @@ LLP array.
 
 Physical Erase Block (PEB) Structure
 ====================================
-PEB
-    -------------------------	^
- 0  |      LLP Header 0     |	|
-    -------------------------	|
- 1  |      LLP Header 1     |	|
-    -------------------------	|
-                .
-                .		First sub-pages (min IO unit)
-                .
-    -------------------------	|
- N  |      LLP Header N     |	v
+
+Typical structure:
+
+PEB is divided into sub-pages:
+
     -------------------------	 
-    |                       |	^
-    |                       |	|
-    |                       |	|
-    |  Erase Block Payload  |	|
-    |                       |	|
-    |                       |	|
-    |                       |	v
+    | First sub-page LLP H  |	 (1)
     -------------------------	 
-    |      LLP Header N+1   |	^
-    -------------------------	|
-    |      LLP Header N+2   |	|
-    -------------------------	|
+    |  Erase Block Payload  |	 (2)
+    -------------------------	 
+    |  Erase Block Payload  |	 (2)
+    -------------------------	 
+    |  Erase Block Payload  |	 (2)
+    -------------------------	 
+    |      LLP Header       |	 (3)
+    -------------------------	 
+    |  Erase Block Payload  |	 (2)
+    -------------------------	 
+    |  Erase Block Payload  |	 (2)
+    -------------------------	 
                 .
-                .		Last sub-pages (min IO unit)
+                .		
                 .
-    -------------------------	|
-    |      LLP Header 2N    |	|
-    -------------------------	v
+    -------------------------	 
+    |  Erase Block Payload  |	 (2)
+    -------------------------	 
+    |      LLP Header       |	 (3)
+    -------------------------	 
+    |  Erase Block Payload  |	 (4)
+    -------------------------	 
+    |  	      EMPTY	    |	 (5)
+    -------------------------	 
+    |  	      EMPTY	    |    (5)
+    -------------------------	 
+    | Last sub-page LLP H   |	 (6)
+    -------------------------	 
+
+(1) The first sub-page of the PEB is always (maybe not if unmapped?) a LLP H
+	type.
+(2) EBP sub-pages containing data written to the LEB at the API.
+
+(3) Updates to the LLP Header are interleaved with the EBP sub-pages.
+
+(4) Last EBP written
+
+(5) Empty pages that were never written before the LEB was unmapped.
+
+(6) The last sub-page of the PEB is always used for LLP H when the PEB is 
+	not the end of the list.
 
 PROBLEM: We have to write whole sub-page at once???
 SOLUTION: Use whole sub page for LLP Header
@@ -148,26 +167,44 @@ SOLUTION: Use whole sub page for LLP Header
 	  to 1.
 	
 PROBLEM: The API allows *not* writing all sub-pages of the LEB at once.
-	This means that we cannot write the LLP header at the end of the PEB because 
-	we also want to write the PEB sequentually (necessary for MLC).
-SOLUTION1: Interleve sub pages in the PEB between Payload type and LLP header type.
+	This means that we cannot write the LLP header at the end of the PEB 
+	because we also want to write the PEB sequentually (necessary for MLC).
+SOLUTION: Interleve sub pages in the PEB between Payload type and LLP header 
+	type.
 PROBLEMS: 
 	1. Cannot set the usable payload size of the LEB
-	2. When searching for the the latset (active) LLP header, we (possible) have
-		to do lots of reading of the sub-pages, we do not know the position of
-		the last (active) LLP header.
-SOLUTION2: Put a LLP Header at the beginning of every sub-page and the remaining page
-		holds data payload.
-PROBLEMS:
-	1. The size of the sub-page (min IO size) reported to higher levels will not 
-		be ^2, unless we use half of all sub-pages for LLP header but this 
-		will result in 50% storage efficiency. 
-		Will non ^2 IO size be a problem???
-	2. We still do not know the position of the active LLP header, without scanning
-		the PEB.
+		- Set the usable payload size to LEB size minus 2 sub-pages
+		- Continue down the LEB interleving sub pages with LLP headers
+		- The first sub-page written will be an LLP Header
+		- Once we have filled the second last sub-page move the LEB
+			payload to a new clean LEB which has no interleved
+			LLP Header sub-pages, using the last sub-page of
+			the old LEB for the LLP Header to the next one (a bit
+			like a page scrub).
+		- LEB unmap requests will be satisfied by writing the last
+			sub-page in the LEB with the NLP.
 
-OLUTION3: Somwhow (not sure how this would work) treat the sub-block more like the 
-	PEB????
+
+	2. When searching for the the latset (active) LLP header, we (possible) 
+		have to do lots of reading of the sub-pages, we do not know the
+		position of the last (active) LLP header.
+		- Difficult to avoid. We can start by checking the last
+			sub-page, incase this is not the end of the chain.
+		- As mentioned elsewhere, include information in the sub-page
+			of other sub-pages. This can be updated when the LLP
+			header is updated (but we still have to find it).
+
+	3. We now have a virtual->physical mapping for sub-pages. This data
+		needs to be included in the LLP Header.
+		- We can calculare the v->p mapping of any payload sub-pages
+		  	written after the last LLP Header.
+		- But if the sub-pages are not written in order, we must leave
+			gaps (but this would break MLC anyway so it probably
+			will not happen).
+
+	4. We have to differentiate the payload sub-pages from the LLP Header
+		sub-pages
+
 LLP Header
 ==========
 
@@ -179,7 +216,10 @@ LLP Header
     |      Free, Bad        |
     |       LLP-CRC         |
     -------------------------
-    |      Old LLP Flag     |
+    |      Old LLP Flag     |	<- not needed, last one in PEB is active
+    -------------------------
+    | Bitmask of LLP Header |
+    |   sub-page indexs     |
     -------------------------
 
 
@@ -201,7 +241,9 @@ e.g. LEB number 10 is mapped to PEB 22
                                    -----------
 
 
-Erase Block Index of the 
+Erase Block Index of the first item in the list. When a LEB is first mapped 
+to the a PEB, the PEB at the LEB index holds the LLP with index of the PEB
+that holds the LEBs payload.
 
 
 NLP - Next List Pointer
@@ -240,6 +282,9 @@ Holds a checksum of the LLP and NLP parts of the LLP Header.
 
 Old LLP Flag
 ============
+
+THIS IS NO LONGER NEEDED (or desirable, we do not want to do the extra sub-page
+write) The last LLP sub-page in the PEB is the active one.
 
 This flag is 1 (the flash erased state) when the LLP Header is in use and 0
 when the header is an old header and no longer used.
@@ -327,7 +372,9 @@ TODO - As UBI1 (torture_peb())
 Auto-resize
 ===========
 
-TODO - As per UBI1
+TODO - As per UBI1 (cannot shrink)
+Resize operation is easy to achieve, adding PEBs to a volume naturally adds
+LEBs too.
 
 Bad PEBs
 ========
@@ -341,15 +388,34 @@ as they will be used to read the LLP pointer to the list. So the LLP header
 contents of the bad PEB will be read one time after each attach. Subsequent
 reads will be satisfies by LLP Header cache.
 
-To avoid further writes to the bad PEB, they are treaded differently that good
+To avoid further writes to the bad PEB, they are treated differently that good
 PEBs:
     - When choosing a new PEB to attach to a list (changes to LEB), the software
         will not choose a bad one.
-    - Related to Unchained free PEB: When garbadge collecting free PEBs, the
+    - Related to Unchained free PEB: When garbage collecting free PEBs, the
         software will shorten the list to two elements plus the number of
         bad PEBs at the start of the list. This way the operation to shorten
         the list (which involves writing the PEB, LLP) will not be writing
         to the bad PEB.
-        TODO - example:
+
+The Last N sub-pages are set to the bad LLP Header contents, incase the bad data
+is a corrupted LLP Header itself.
+
+Note: If a PEB is so bad that no data can be read at all, we are stuck and the
+device is now non-functional. Nothing can be done as we have to get the LLP
+Header for the head of the list.
+	- Maybe scope for putting the LLP Header in a different (the next)
+		PEB LLP Header sub-pages.
+
+Data redundancy
+===============
+
+New idea. Have multiple LLP lists for each LEB so that we get redundancy, either
+of the payload data (halves storage capacity immediately) or of the list chain.
+	- Redundant list chain for list that terminates in the same PEB
+		could be the answer to safety on power outage.
+	- Redundant payloads help with the situation where a payload write
+	 	is interrupted.
+
 
 

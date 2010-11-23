@@ -418,4 +418,22 @@ of the payload data (halves storage capacity immediately) or of the list chain.
 	 	is interrupted.
 
 
+Include ECC error correction
+============================
 
+The LLP H sub-pages could also have ECC correction data for detection of too
+many errors. Otherwise rely on lower layers reporting -EBADMSG when data is
+corrupted.
+
+
+
+Implementation phases
+=====================
+
+To progress this and have some milestones, the implementation shall proceed:
+
+1 - No scanning, LEB=PEB 
+2 - Add PEB chaining, no GC
+3 - Add GC
+4 - Add caching optimisation
+5 - Add other PEB LLP H data in spare

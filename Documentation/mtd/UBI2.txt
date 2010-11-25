@@ -369,6 +369,35 @@ Torturing
 
 TODO - As UBI1 (torture_peb())
 
+Partitioning device into volumes
+================================
+
+This is achieved at the logical level by simply carving up the logical space
+into volumes.
+
+
+Volume Table
+============
+
+This is a data table that needs to be storred in flash and contains information
+on the volume partitioning. A special volume (zero) is created that holds the
+volume table. This is positioned at the very start of the flash where is
+can be found without knowing the volume table information (bootstrap). 
+
+LEB numbers are actually the LEB *within a particular volume*. The API specifies
+the volume along with the offset (which becomes the LEB) into it when reading
+or writing.
+
+
+Device Logical Erase Blocks (DLEB's)
+====================================
+
+As the LEB is the logical offset within a volume and a volume is a logical chunk
+of the available LEBs made available on a device, we need another concept that
+is the logical block number within the entire logical block range of the device,
+i.e. accross all volumes on the device. This is the DLEB (prononced D-LEB).
+
+
 Auto-resize
 ===========
 
@@ -433,7 +462,14 @@ Implementation phases
 To progress this and have some milestones, the implementation shall proceed:
 
 1 - No scanning, LEB=PEB 
+	- Attach, make volume tables
+
 2 - Add PEB chaining, no GC
+
 3 - Add GC
+
 4 - Add caching optimisation
+
 5 - Add other PEB LLP H data in spare
+
+

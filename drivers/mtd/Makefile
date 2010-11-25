@@ -36,3 +36,4 @@ obj-y		+= chips/ lpddr/ maps/ onenand/ tests/
 endif
 
 obj-$(CONFIG_MTD_UBI)		+= ubi/
+obj-$(CONFIG_MTD_UBI2)		+= ubi2/

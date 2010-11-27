@@ -298,23 +298,20 @@ bad:
  * @si: scanning information
  * @copy: number of the volume table copy
  * @vtbl: contents of the volume table
+ * @lvol: layout volume object used to write the layout volume
  *
  * This function returns zero in case of success and a negative error code in
  * case of failure.
  */
 //static int create_vtbl(struct ubi_device *ubi, struct ubi_scan_info *si,
 static int create_vtbl(struct ubi_device *ubi,
-		       int copy, void *vtbl)
+		       int copy, void *vtbl,
+		       struct ubi_volume *lvol)
 {
 	int err, tries = 0;
 //	static struct ubi_vid_hdr *vid_hdr;
 //	struct ubi_scan_volume *sv;
 //	struct ubi_scan_leb *new_seb, *old_seb = NULL;
-	struct ubi_volume vol;
-
-	/* Generate the ubi_volume for the volume table */
-	vol.dleb_offset = 0;
-	vol.vol_id = UBI_LAYOUT_VOLUME_ID;
 
 	ubi_msg("create volume table (copy #%d)", copy + 1);
 
@@ -366,7 +363,7 @@ retry:
 	
 	/* Write the layout volume contents */
 	err = ubi_eba_write_leb(
-		ubi, vtbl, &vol, copy, 0, ubi->vtbl_size, UBI_UNKNOWN);
+		ubi, vtbl, lvol, copy, 0, ubi->vtbl_size, UBI_UNKNOWN);
 	if (err)
 		goto write_error;
 
@@ -401,20 +398,17 @@ out_free:
 /**
  * process_lvol - process the layout volume.
  * @ubi: UBI device description object
- * @si: scanning information
- * @sv: layout volume scanning information
+ * @lvol: layout volume object used to read the layout volume contents
  *
  * This function is responsible for reading the layout volume, ensuring it is
  * not corrupted, and recovering from corruptions if needed. Returns volume
  * table in case of success and a negative error code in case of failure.
  */
 static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi,
-					    struct ubi_scan_info *si,
-					    struct ubi_scan_volume *sv)
+					    struct ubi_volume *lvol)
 {
 	int err;
-	struct rb_node *rb;
-	struct ubi_scan_leb *seb;
+	int i;
 	struct ubi_vtbl_record *leb[UBI_LAYOUT_VOLUME_EBS] = { NULL, NULL };
 	int leb_corrupted[UBI_LAYOUT_VOLUME_EBS] = {1, 1};
 
@@ -446,6 +440,24 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi,
 	dbg_gen("check layout volume");
 
 	/* Read both LEB 0 and LEB 1 into memory */
+	for (i = 0; i < UBI_LAYOUT_VOLUME_EBS; ++i) {
+		leb[i] = vmalloc(ubi->vtbl_size);
+		if (!leb[i]) {
+			err = -ENOMEM;
+			goto out_free;
+		}
+		memset(leb[i], 0, ubi->vtbl_size);
+
+		err = ubi_eba_read_leb(
+			ubi, lvol, i, leb[i], 0, ubi->vtbl_size, 0);
+		if (err) {
+			/* If the read failed, fall back to the other copy */
+			err = 0;
+		}
+	}
+
+#if 0 // TODO - remove old implementation
+	/* Read both LEB 0 and LEB 1 into memory */
 	ubi_rb_for_each_entry(rb, seb, &sv->root, u.rb) {
 		leb[seb->lnum] = vmalloc(ubi->vtbl_size);
 		if (!leb[seb->lnum]) {
@@ -471,6 +483,7 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi,
 		else if (err)
 			goto out_free;
 	}
+#endif
 
 	err = -EINVAL;
 	if (leb[0]) {
@@ -486,7 +499,7 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi,
 						  ubi->vtbl_size);
 		if (leb_corrupted[1]) {
 			ubi_warn("volume table copy #2 is corrupted");
-			err = create_vtbl(ubi, si, 1, leb[0]);
+			err = create_vtbl(ubi, 1, leb[0], lvol);
 			if (err)
 				goto out_free;
 			ubi_msg("volume table was restored");
@@ -509,7 +522,7 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi,
 		}
 
 		ubi_warn("volume table copy #1 is corrupted");
-		err = create_vtbl(ubi, si, 0, leb[1]);
+		err = create_vtbl(ubi, 0, leb[1], lvol);
 		if (err)
 			goto out_free;
 		ubi_msg("volume table was restored");
@@ -527,13 +540,13 @@ out_free:
 /**
  * create_empty_lvol - create empty layout volume.
  * @ubi: UBI device description object
- * @si: scanning information
+ * @lvol: layout volume object used to write the layout volume
  *
  * This function returns volume table contents in case of success and a
  * negative error code in case of failure.
  */
 static struct ubi_vtbl_record *create_empty_lvol(struct ubi_device *ubi,
-						 struct ubi_scan_info *si)
+						 struct ubi_volume *lvol)
 {
 	int i;
 	struct ubi_vtbl_record *vtbl;
@@ -549,7 +562,7 @@ static struct ubi_vtbl_record *create_empty_lvol(struct ubi_device *ubi,
 	for (i = 0; i < UBI_LAYOUT_VOLUME_EBS; i++) {
 		int err;
 
-		err = create_vtbl(ubi, si, i, vtbl);
+		err = create_vtbl(ubi, i, vtbl, lvol);
 		if (err) {
 			vfree(vtbl);
 			return ERR_PTR(err);
@@ -562,31 +575,51 @@ static struct ubi_vtbl_record *create_empty_lvol(struct ubi_device *ubi,
 /**
  * init_volumes - initialize volume information for existing volumes.
  * @ubi: UBI device description object
- * @si: scanning information
+ * @si: scanning information	TODO - remove
  * @vtbl: volume table
+ * @lvol: the volume object for the layout volume
  *
- * This function allocates volume description objects for existing volumes.
+ * This function allocates volume description objects for existing volumes 
+ * except the layout volume which is passed in.
  * Returns zero in case of success and a negative error code in case of
  * failure.
  */
-static int init_volumes(struct ubi_device *ubi, const struct ubi_scan_info *si,
-			const struct ubi_vtbl_record *vtbl)
+//static int init_volumes(struct ubi_device *ubi, const struct ubi_scan_info *si,
+static int init_volumes(struct ubi_device *ubi,
+			const struct ubi_vtbl_record *vtbl,
+			struct ubi_volume *lvol)
 {
-	int i, reserved_pebs = 0;
-	struct ubi_scan_volume *sv;
+	int i, reserved_pebs = 0, dleb_offset = 0;
+//	struct ubi_scan_volume *sv;
 	struct ubi_volume *vol;
 
+	/* Start with the layout volume as to resides at the first two dlebs */
+	reserved_pebs += lvol->reserved_pebs;
+
+	vol = lvol;
 	for (i = 0; i < ubi->vtbl_slots; i++) {
 		cond_resched();
 
 		if (be32_to_cpu(vtbl[i].reserved_pebs) == 0)
 			continue; /* Empty record */
 
+		/* 
+		 * Calculate the dleb offset of the start of the next volume.
+		 * In this design the reserved PEBs for a volume is equal to the
+		 * size of the volume in LEBs. We carve up the device logical 
+		 * space into the volumes so that they are but up against each 
+		 * other.
+		 * TODO - we need to put the auto-resize volume at the end (I 
+		 * think), so it can grow into any unused space
+		 */
+		dleb_offset = vol->dleb_offset + vol->reserved_pebs;
+
 		vol = kzalloc(sizeof(struct ubi_volume), GFP_KERNEL);
 		if (!vol)
 			return -ENOMEM;
 
 		vol->reserved_pebs = be32_to_cpu(vtbl[i].reserved_pebs);
+		vol->dleb_offset = dleb_offset;
 		vol->alignment = be32_to_cpu(vtbl[i].alignment);
 		vol->data_pad = be32_to_cpu(vtbl[i].data_pad);
 		vol->upd_marker = vtbl[i].upd_marker;
@@ -628,6 +661,7 @@ static int init_volumes(struct ubi_device *ubi, const struct ubi_scan_info *si,
 			continue;
 		}
 
+#if 0	/* No scanning information */
 		/* Static volumes only */
 		sv = ubi_scan_find_sv(si, i);
 		if (!sv) {
@@ -652,15 +686,20 @@ static int init_volumes(struct ubi_device *ubi, const struct ubi_scan_info *si,
 			vol->corrupted = 1;
 			continue;
 		}
+#endif
 
-		vol->used_ebs = sv->used_ebs;
+		// TODO - We have no information on the used erase blocks
+		//vol->used_ebs = sv->used_ebs;
+		vol->used_ebs = 1;
 		vol->used_bytes =
 			(long long)(vol->used_ebs - 1) * vol->usable_leb_size;
-		vol->used_bytes += sv->last_data_size;
-		vol->last_eb_bytes = sv->last_data_size;
+		// TODO not sure about this
+		//vol->used_bytes += sv->last_data_size;
+		//vol->last_eb_bytes = sv->last_data_size;
 	}
 
 	/* And add the layout volume */
+#if 0	// TODO - remove
 	vol = kzalloc(sizeof(struct ubi_volume), GFP_KERNEL);
 	if (!vol)
 		return -ENOMEM;
@@ -683,6 +722,7 @@ static int init_volumes(struct ubi_device *ubi, const struct ubi_scan_info *si,
 	reserved_pebs += vol->reserved_pebs;
 	ubi->vol_count += 1;
 	vol->ubi = ubi;
+#endif
 
 	if (reserved_pebs > ubi->avail_pebs) {
 		ubi_err("not enough PEBs, required %d, available %d",
@@ -695,6 +735,44 @@ static int init_volumes(struct ubi_device *ubi, const struct ubi_scan_info *si,
 	ubi->avail_pebs -= reserved_pebs;
 
 	return 0;
+}
+
+/**
+ * init_layout_volume - initialize volume information for layout volume.
+ * @ubi: UBI device description object
+ *
+ * This function allocates volume description object for the layout volume.
+ * Returns pointer to layout volume object in case of success and NULL on
+ * failure.
+ */
+static struct ubi_volume *init_layout_volume(struct ubi_device *ubi)
+{
+	struct ubi_volume *lvol;
+
+	/* And add the layout volume */
+	lvol = kzalloc(sizeof(struct ubi_volume), GFP_KERNEL);
+	if (!lvol)
+		return ERR_PTR(-ENOMEM);
+
+	lvol->reserved_pebs = UBI_LAYOUT_VOLUME_EBS;
+	lvol->dleb_offset = UBI_LAYOUT_VOLUME_DLEB_OFFSET;
+	lvol->alignment = 1;
+	lvol->vol_type = UBI_DYNAMIC_VOLUME;
+	lvol->name_len = sizeof(UBI_LAYOUT_VOLUME_NAME) - 1;
+	memcpy(lvol->name, UBI_LAYOUT_VOLUME_NAME, lvol->name_len + 1);
+	lvol->usable_leb_size = ubi->leb_size;
+	lvol->used_ebs = lvol->reserved_pebs;
+	lvol->last_eb_bytes = lvol->reserved_pebs;
+	lvol->used_bytes =
+		(long long)lvol->used_ebs * (ubi->leb_size - lvol->data_pad);
+	lvol->vol_id = UBI_LAYOUT_VOLUME_ID;
+	lvol->ref_count = 1;
+	ubi->volumes[vol_id2idx(ubi, lvol->vol_id)] = lvol;
+	reserved_pebs += lvol->reserved_pebs;
+	ubi->vol_count += 1;
+	lvol->ubi = ubi;
+
+	return vol;
 }
 
 /**
@@ -818,7 +896,8 @@ static int check_scanning_info(const struct ubi_device *ubi,
 int ubi_read_volume_table(struct ubi_device *ubi)
 {
 	int i, err;
-	struct ubi_scan_volume *sv;
+	struct ubi_volume *lvol;
+//	struct ubi_scan_volume *sv;
 
 	empty_vtbl_record.crc = cpu_to_be32(0xf116c36b);
 
@@ -833,6 +912,8 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	ubi->vtbl_size = ubi->vtbl_slots * UBI_VTBL_RECORD_SIZE;
 	ubi->vtbl_size = ALIGN(ubi->vtbl_size, ubi->min_io_size);
 
+#if 0
+	// TODO - remove scanning information
 	sv = ubi_scan_find_sv(si, UBI_LAYOUT_VOLUME_ID);
 	if (!sv) {
 		/*
@@ -859,9 +940,32 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 			return -EINVAL;
 		}
 
-		ubi->vtbl = process_lvol(ubi, si, sv);
+		ubi->vtbl = process_lvol(ubi);
 		if (IS_ERR(ubi->vtbl))
 			return PTR_ERR(ubi->vtbl);
+	}
+#endif
+
+	/*
+	 * Initialise the layout volume. We know where it is so we can create
+	 * the object without reading anything from flash. Also we need to 
+	 * volume object so that we can read the layout volume.
+	 */
+	lvol = init_layout_volume(ubi);
+	if (IS_ERR(lvol))
+		return PTR_ERR(lvol);
+	/* 
+	 * Process the layout volume, which is located at the start of the
+	 * Logical device. If the layout volume is found to be corrupted,
+	 * write a new empty one.
+	 */
+	ubi->vtbl = process_lvol(ubi, lvol);
+	if (IS_ERR(ubi->vtbl)) {
+		ubi->vtbl = create_empty_lvol(ubi, lvol);
+		if (IS_ERR(ubi->vtbl)) {
+			err = PTR_ERR(ubi->vtbl);
+			goto out_free;
+		}
 	}
 
 	ubi->avail_pebs = ubi->good_peb_count - ubi->corr_peb_count;
@@ -870,10 +974,13 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	 * The layout volume is OK, initialize the corresponding in-RAM data
 	 * structures.
 	 */
-	err = init_volumes(ubi, si, ubi->vtbl);
+	//err = init_volumes(ubi, si, ubi->vtbl);
+	err = init_volumes(ubi, ubi->vtbl, lvol);
 	if (err)
 		goto out_free;
 
+#if 0	// TODO - We need to do something equivelent, but I am not sure what,
+	//		given that the LEBs have no info on their volume
 	/*
 	 * Make sure that the scanning information is consistent to the
 	 * information stored in the volume table.
@@ -881,6 +988,7 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	err = check_scanning_info(ubi, si);
 	if (err)
 		goto out_free;
+#endif
 
 	return 0;
 

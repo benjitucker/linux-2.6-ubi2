@@ -378,7 +378,10 @@ int ubi_eba_read_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 	if (err)
 		return err;
 
-	pnum = vol->eba_tbl[lnum];
+//	pnum = vol->eba_tbl[lnum];
+	/* In this initial simple version the leb number = the peb number */
+	pnum = lnum + vol->dleb_offset;
+
 	if (pnum < 0) {
 		/*
 		 * The logical eraseblock is not mapped, fill the whole buffer

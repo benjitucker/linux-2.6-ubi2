@@ -79,13 +79,13 @@ LLP array.
         - Make sure the GC thread has the whole chain LLP headers in cache
             before attempting to reclaim the PEBs
         - Minimise the chances by:
-            - 1. Erasing the PEBs reclamed in reverse order, starting at the 
+            - 1. Erasing the PEBs reclaimed in reverse order, starting at the 
                 end of the list.
             - 2. GC background thread lazily walks through flash reading
                 chains (using cache if possible). If is finds a chain that
                 terminates in an erased (free) PEB then the whole chain
                 should be free.
-        - However if the outage occures inbetween 1 and 2 above, i.e. the
+        - However if the outage occurs in between 1 and 2 above, i.e. the
             PEB chain does not end in an empty (free) PEB then (2) above
             will not recognise the chain as free.
             - Do not worry. The chances of this are small and eventually
@@ -168,16 +168,16 @@ SOLUTION: Use whole sub page for LLP Header
 	
 PROBLEM: The API allows *not* writing all sub-pages of the LEB at once.
 	This means that we cannot write the LLP header at the end of the PEB 
-	because we also want to write the PEB sequentually (necessary for MLC).
-SOLUTION: Interleve sub pages in the PEB between Payload type and LLP header 
+	because we also want to write the PEB sequentially (necessary for MLC).
+SOLUTION: Interleave sub pages in the PEB between Payload type and LLP header 
 	type.
 PROBLEMS: 
 	1. Cannot set the usable payload size of the LEB
 		- Set the usable payload size to LEB size minus 2 sub-pages
-		- Continue down the LEB interleving sub pages with LLP headers
+		- Continue down the LEB interleaving sub pages with LLP headers
 		- The first sub-page written will be an LLP Header
 		- Once we have filled the second last sub-page move the LEB
-			payload to a new clean LEB which has no interleved
+			payload to a new clean LEB which has no interleaved
 			LLP Header sub-pages, using the last sub-page of
 			the old LEB for the LLP Header to the next one (a bit
 			like a page scrub).
@@ -185,18 +185,18 @@ PROBLEMS:
 			sub-page in the LEB with the NLP.
 
 
-	2. When searching for the the latset (active) LLP header, we (possible) 
+	2. When searching for the latest (active) LLP header, we (possible) 
 		have to do lots of reading of the sub-pages, we do not know the
 		position of the last (active) LLP header.
 		- Difficult to avoid. We can start by checking the last
-			sub-page, incase this is not the end of the chain.
+			sub-page, in case this is not the end of the chain.
 		- As mentioned elsewhere, include information in the sub-page
 			of other sub-pages. This can be updated when the LLP
 			header is updated (but we still have to find it).
 
 	3. We now have a virtual->physical mapping for sub-pages. This data
 		needs to be included in the LLP Header.
-		- We can calculare the v->p mapping of any payload sub-pages
+		- We can calculate the v->p mapping of any payload sub-pages
 		  	written after the last LLP Header.
 		- But if the sub-pages are not written in order, we must leave
 			gaps (but this would break MLC anyway so it probably
@@ -404,6 +404,17 @@ Auto-resize
 TODO - As per UBI1 (cannot shrink)
 Resize operation is easy to achieve, adding PEBs to a volume naturally adds
 LEBs too.
+However this is a problem for all but the last volume and is also difficult
+to srink a volume.
+Make this a limitation for now.
+
+
+Volume Update
+=============
+
+Need to implementation volume update in much the same way as UBI1. Check the
+volume update marker at attach time.
+
 
 Bad PEBs
 ========
@@ -446,6 +457,9 @@ of the payload data (halves storage capacity immediately) or of the list chain.
 	- Redundant payloads help with the situation where a payload write
 	 	is interrupted.
 
+OR, use a similar mechanism to the volume table, for every page. This would
+ensure that data pages could not be partially written.
+
 
 Include ECC error correction
 ============================
@@ -454,6 +468,22 @@ The LLP H sub-pages could also have ECC correction data for detection of too
 many errors. Otherwise rely on lower layers reporting -EBADMSG when data is
 corrupted.
 
+
+Wear Leveling
+=============
+
+The system needs to recycle blocks that are static into the ones that are
+written more often so that the erase cycle wearing is distributed across the
+device.
+This will happen naturally anyway to some degree as any PEB stores the payload
+for one LEB and also is the head of the list for another LEB.
+However we need to forcibly eject static PEB from time to time by adding a new 
+PEB to the chain and copying the payload data there (also is an opportunity
+to add/update cache data placed with the LLP Headers). The background GC will
+then eventually recycle the static PEB.
+As we do not have erase counters, we have to monitor the PEB erase activity.
+It is likely that static PEB are static always, so we do not need to record
+the activity across reboots, in flash.
 
 
 Implementation phases

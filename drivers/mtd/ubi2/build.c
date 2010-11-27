@@ -569,55 +569,73 @@ static void free_internal_volumes(struct ubi_device *ubi)
 }
 
 /**
- * attach_by_scanning - attach an MTD device using scanning method.
+ * attach_devie - attach an MTD device.
  * @ubi: UBI device descriptor
  *
  * This function returns zero in case of success and a negative error code in
  * case of failure.
- *
- * Note, currently this is the only method to attach UBI devices. Hopefully in
- * the future we'll have more scalable attaching methods and avoid full media
- * scanning. But even in this case scanning will be needed as a fall-back
- * attaching method if there are some on-flash table corruptions.
  */
-static int attach_by_scanning(struct ubi_device *ubi)
+static int attach_device(struct ubi_device *ubi)
 {
 	int err;
-	struct ubi_scan_info *si;
+//	struct ubi_scan_info *si;
 
+#if 0
 	si = ubi_scan(ubi);
 	if (IS_ERR(si))
 		return PTR_ERR(si);
+#endif
 
-	ubi->bad_peb_count = si->bad_peb_count;
+//	ubi->bad_peb_count = si->bad_peb_count;
+	
+	// TODO - we do not scan so we do not know the bad peb's
+	//		put this information in the volume table?
+	ubi->bad_peb_count = 0;
+
 	ubi->good_peb_count = ubi->peb_count - ubi->bad_peb_count;
-	ubi->corr_peb_count = si->corr_peb_count;
-	ubi->max_ec = si->max_ec;
-	ubi->mean_ec = si->mean_ec;
-	ubi_msg("max. sequence number:       %llu", si->max_sqnum);
 
-	err = ubi_read_volume_table(ubi, si);
+	// TODO - we do not scan so we do not know the corrupted peb's
+	//		either. Put this information in the volume table?
+	//ubi->corr_peb_count = si->corr_peb_count;
+	ubi->corr_peb_count = 0;
+
+	// TODO - we do not keep erase counters, handled differently
+	//ubi->max_ec = si->max_ec;
+	//ubi->mean_ec = si->mean_ec;
+	ubi->max_ec = 0;
+	ubi->mean_ec = 0;
+
+	// TODO - Again, we do not know the sequence number at this point
+	//ubi_msg("max. sequence number:       %llu", si->max_sqnum);
+
+	err = ubi_read_volume_table(ubi);
 	if (err)
 		goto out_si;
 
+	// TODO - wear leveling needs to be considered later
+#if 0
 	err = ubi_wl_init_scan(ubi, si);
 	if (err)
 		goto out_vtbl;
+#endif
 
+	// TODO remove. The ubi2 eba layer does not need this initialisation
+#if 0
 	err = ubi_eba_init_scan(ubi, si);
 	if (err)
 		goto out_wl;
+#endif
 
-	ubi_scan_destroy_si(si);
+//	ubi_scan_destroy_si(si);
 	return 0;
 
 out_wl:
-	ubi_wl_close(ubi);
+//	ubi_wl_close(ubi);
 out_vtbl:
 	free_internal_volumes(ubi);
 	vfree(ubi->vtbl);
 out_si:
-	ubi_scan_destroy_si(si);
+//	ubi_scan_destroy_si(si);
 	return err;
 }
 
@@ -944,13 +962,13 @@ int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num, int vid_hdr_offset)
 		goto out_free;
 #endif
 
-#if 0	// TODO - we do not scan in ubi2
-	err = attach_by_scanning(ubi);
+	// TODO - we do not scan in ubi2 - changed the name of this function
+	err = attach_device(ubi);
 	if (err) {
-		dbg_err("failed to attach by scanning, error %d", err);
+		dbg_err("failed to attach MTD device, error %d", err);
 		goto out_free;
 	}
-#endif
+
 
 #if 0 	// TODO - implement the auto resize option
 	if (ubi->autoresize_vol_id != -1) {
@@ -1219,8 +1237,8 @@ static int __init ubi_init(void)
 		struct mtd_info *mtd;
 
 		cond_resched();
-
-		printk("UBI2 open device %u\n", i);
+		
+		printk("UBI2 open device %u\n", i);	// TODO remove
 
 		mtd = open_mtd_device(p->name);
 		if (IS_ERR(mtd)) {

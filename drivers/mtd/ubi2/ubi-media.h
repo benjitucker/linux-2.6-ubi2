@@ -311,6 +311,7 @@ struct ubi_vid_hdr {
 #define UBI_LAYOUT_VOLUME_EBS    2
 #define UBI_LAYOUT_VOLUME_NAME   "layout volume"
 #define UBI_LAYOUT_VOLUME_COMPAT UBI_COMPAT_REJECT
+#define UBI_LAYOUT_VOLUME_DLEB_OFFSET 0
 
 /* The maximum number of volumes per one UBI device */
 #define UBI_MAX_VOLUMES 128

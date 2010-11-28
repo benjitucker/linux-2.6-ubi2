@@ -333,10 +333,18 @@ int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 	if (err)
 		return err;
 
+//	pnum = vol->eba_tbl[lnum];
+	/* In this initial simple version the leb number = the peb number */
+	pnum = lnum + vol->dleb_offset;
+
+#if 0	// TODO - remove
 	pnum = vol->eba_tbl[lnum];
 	if (pnum < 0)
 		/* This logical eraseblock is already unmapped */
 		goto out_unlock;
+#endif
+
+// TODO - This needs thinking through....
 
 	dbg_eba("erase LEB %d:%d, PEB %d", vol_id, lnum, pnum);
 

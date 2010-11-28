@@ -612,7 +612,8 @@ static int attach_device(struct ubi_device *ubi)
 	if (err)
 		goto out_si;
 
-	// TODO - wear leveling needs to be considered later
+	// TODO - wear leveling needs to be considered later, but it will not 
+	// need scanning information for initialisation.
 #if 0
 	err = ubi_wl_init_scan(ubi, si);
 	if (err)

@@ -42,13 +42,28 @@ Alternative idea: Unchained free PEB
 ------------------------------------
 
 In this scheme, instead of maintaining lists of free PEBs, PEBs that are free
-are simply those that are fully erased. Free PEBs can be identified by empty
-LLP array.
+are simply those that are fully erased*. This avoids having to maintain the free
+list(s) which itself would require LLP updated (sub-page writes). This causes
+additional page wear.
+Free PEBs can be identified by empty first sub-page if the page to completely 
+erased.
+	- How do we identify free PEBs without reading to whole PEB.
+		- 1st sub-page NLP will be FF if the PEB is the end of the list
+		- 1st sub-page LLP will be FF if the PEB is 
+TODO - Need to think about how it identify free PEBs
+
+
     - To free up (garbage collect GC) free PEBs:
         - reduce the PEB chain to length 1
             - LLP update when all LLP array elements have been used problem???
+		- Always leave the last sub-page available for the final LLP
+			header even if this means that the LEB payload must be
+			moved to a new PEB. 
+		- Set the payload size to the PEB size minus 2 sub-pages (as
+			UBI1). One sub page for the first LLP header and one for
+			the last.
         - Follow PEB chain and erase them.
-	    - Once erased, the free PEB's active LLP header must be restored
+	    - * Once erased, the free PEB's active LLP header must be restored
 	    	if the PEB itself is the head of a list.
 	    - ...and how do we do that safely????
         - Cache the index's of the newly erased PEBs
@@ -203,7 +218,17 @@ PROBLEMS:
 			will not happen).
 
 	4. We have to differentiate the payload sub-pages from the LLP Header
-		sub-pages
+		sub-pages. THIS IS A SECURITY RISK and it would be possible to
+		write a payload sub page that looks like an LLP H and fool ubi2
+		into providing access to data that it should not.
+PROBLEM: How to avoid this security risk
+	Perhaps we could check that the other LLP Header sub pages
+		have information on this page? 
+	But what if there are no other valid LLP H sub pages, i.e. all others
+		have crc errors??
+	Perhaps we should be crypto signing the LLP H sub pages?
+		No, will not be secure either (and slow).
+	
 
 LLP Header
 ==========
@@ -272,6 +297,27 @@ time we see that the list runs through LEB 99
 Obviously the chain can be any length (although steps are taken to)
 minimise the chain lengths to avoid having to read many pages when
 first discovering the PEB mapped to a particular LEB.
+
+
+Mapping & unmapping operations
+==============================
+
+In this design, LEBs are always mapped to a PEB. The Unmap operation simply
+switches the LEB to be mapped to a (payload) empty PEB and the map operation
+is a NOP.
+Unmap operation that switches the LEB to a clean PEB is achieved by updating the
+LLP Header of the last PEB in the chain is that it's NLP points to a new PEB.
+This increases the length of the chain by one PEB. The last sub-page in the
+PEB is used for the updated LLP header in this case. This is an optimisation
+that allows the active LLP header to be found quickly when first following the
+chain.
+
+The exception to the rule is when a PEB is completely erased. It has no LLP 
+header in the first sub-page (infact the first sub-page contains only 1 bits).
+The corresponding LEB (has the same index) is in this case *is* unmapped. The
+map operation on this LEB does indeed write the PEB with its first LLP header.
+Unmap operations on completely erased LEB (PEB) is a NOP.
+
 
 
 LLP-CRC

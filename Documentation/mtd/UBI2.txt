@@ -48,10 +48,9 @@ additional page wear.
 Free PEBs can be identified by empty first sub-page if the page to completely 
 erased.
 	- How do we identify free PEBs without reading to whole PEB.
-		- 1st sub-page NLP will be FF if the PEB is the end of the list
-		- 1st sub-page LLP will be FF if the PEB is 
-TODO - Need to think about how it identify free PEBs
-
+		- if the first sub-page is all FF's
+			or
+		- if the active LLP Header has the Free bit set.
 
     - To free up (garbage collect GC) free PEBs:
         - reduce the PEB chain to length 1
@@ -64,10 +63,17 @@ TODO - Need to think about how it identify free PEBs
 			the last.
         - Follow PEB chain and erase them.
 	    - * Once erased, the free PEB's active LLP header must be restored
-	    	if the PEB itself is the head of a list.
+	    	if the PEB itself is the head of a list (with free bit set).
 	    - ...and how do we do that safely????
+		- Using the update partner logic
+	    - Unfortunately this means that we will use another sub-page when
+		the PEB gets mapped in, just to set the Free bit to zero.
+		This cannot be helped.
         - Cache the index's of the newly erased PEBs
         - Breaks the update partner rule??
+	    - Not if we have to restore the LLP H to the newly erased block,
+		this can have the UPP.
+
 
     - Background garbage collection thread would seek out free PEBs and cache
         their index's
@@ -246,6 +252,8 @@ LLP Header
     | Bitmask of LLP Header |
     |   sub-page indexs     |
     -------------------------
+    |         LEB           |
+    -------------------------
 
 
 LLP - Linked List Pointer
@@ -368,6 +376,10 @@ Each atomic change for the lists involves updating two LLP headers, the first
 update sets an NLP to the new item on the list and the second updates the new 
 list item. The two PEBs containing the LLP Headers updated are called
 Update Partners and their PEB numbers are set in the UPP.
+	- A second scenario is where the LLP header of the second element 
+		in a chain is updated (to add updated partner info) followed
+		by the first element in the chain being erased and then the
+		LLP header restored.
 
 When ever an update to a LLP Header is made, after the previous LLP Header in
 the array is marked as Old, the UPP number is written. Higher level software
@@ -393,6 +405,16 @@ the update partner. If it finds that the partner USN does not match then the
 software will discard the particular LLP Header and revert to the previous one
 in the list.  TODO - think this through??
 	- This breaks down when the partner is unmapped and erased.
+		- Not any more because the partner may need a new LLP H to
+			maintain the head of an LLP list.
+	- TODO However we do need to think this through.
+
+	- The update partners should have information about each others LLP H
+		within their LLP Header so that the SW can rebuild the partner
+		LLP Header.
+		- The SW can check if the other LLP Header information it finds
+			is up to date by checking that the USN is higher than 
+			the partners active LLP H USN.
 
 One optimisation here is that if the USN is less than the highest USN 
 encountered so far, then it must be correct as only the last USN will be

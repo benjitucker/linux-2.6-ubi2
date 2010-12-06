@@ -364,12 +364,12 @@ retry:
 	//TODO - use the write function of our new logical list API
 	
 	/* Write the layout volume contents */
-	err = ubi_eba_unmap_leb(ubi, layout_vol, i);
+	err = ubi_eba_unmap_leb(ubi, layout_vol, copy);
 	if (err)
 		goto write_error;
 
 	err = ubi_eba_write_leb(
-		ubi, vtbl, layout_vol, copy, 0, ubi->vtbl_size, UBI_LONGTERM);
+		ubi, layout_vol, copy, vtbl, 0, ubi->vtbl_size, UBI_LONGTERM);
 	if (err)
 		goto write_error;
 
@@ -381,11 +381,12 @@ retry:
 	err = ubi_scan_add_used(ubi, si, new_seb->pnum, new_seb->ec,
 				vid_hdr, 0);
 	kfree(new_seb);
-#endif
 	ubi_free_vid_hdr(ubi, vid_hdr);
+#endif
 	return err;
 
 write_error:
+#if 0
 	if (err == -EIO && ++tries <= 5) {
 		/*
 		 * Probably this physical eraseblock went bad, try to pick
@@ -395,8 +396,9 @@ write_error:
 		goto retry;
 	}
 	kfree(new_seb);
+#endif
 out_free:
-	ubi_free_vid_hdr(ubi, vid_hdr);
+//	ubi_free_vid_hdr(ubi, vid_hdr);
 	return err;
 
 }
@@ -772,7 +774,6 @@ static int init_layout_volume(struct ubi_device *ubi)
 	lvol->vol_id = UBI_LAYOUT_VOLUME_ID;
 	lvol->ref_count = 1;
 	ubi->volumes[vol_id2idx(ubi, lvol->vol_id)] = lvol;
-	reserved_pebs += lvol->reserved_pebs;
 	ubi->vol_count += 1;
 	lvol->ubi = ubi;
 
@@ -903,7 +904,7 @@ static int check_scanning_info(const struct ubi_device *ubi,
 int ubi_read_volume_table(struct ubi_device *ubi)
 {
 	int i, err;
-	struct ubi_volume *lvol;
+//	struct ubi_volume *lvol;
 //	struct ubi_scan_volume *sv;
 
 	empty_vtbl_record.crc = cpu_to_be32(0xf116c36b);

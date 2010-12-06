@@ -348,8 +348,17 @@ int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 
 	dbg_eba("erase LEB %d:%d, PEB %d", vol_id, lnum, pnum);
 
-	vol->eba_tbl[lnum] = UBI_LEB_UNMAPPED;
-	err = ubi_wl_put_peb(ubi, pnum, 0);
+	// TODO - in this simple initial version we just erase the PEB
+	err = ubi_io_sync_erase(ubi, pnum, 0);
+	if (err < 0)
+		goto out_unlock;
+
+	// Ignore the number of erasures
+	err = 0;
+
+	// TODO - we will be doing something much more sophisticated
+//	vol->eba_tbl[lnum] = UBI_LEB_UNMAPPED;
+//	err = ubi_wl_put_peb(ubi, pnum, 0);
 
 out_unlock:
 	leb_write_unlock(ubi, vol_id, lnum);
@@ -477,8 +486,10 @@ retry:
 		}
 	}
 
+#if 0
 	if (scrub)
 		err = ubi_wl_scrub_peb(ubi, pnum);
+#endif
 
 	leb_read_unlock(ubi, vol_id, lnum);
 	return err;
@@ -636,7 +647,9 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 		leb_write_unlock(ubi, vol_id, lnum);
 		return err;
 	}
-
+	
+// TODO - we should never get to this point now
+	
 	/*
 	 * The logical eraseblock is not mapped. We have to get a free physical
 	 * eraseblock and write the volume identifier header there first.

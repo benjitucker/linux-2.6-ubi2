@@ -1189,11 +1189,19 @@ static struct mtd_info * __init open_mtd_device(const char *mtd_dev)
 	return mtd;
 }
 
+//TODO remove forward decl
+static int __init ubi_mtd_param_parse(const char *val, struct kernel_param *kp);
+
 static int __init ubi_init(void)
 {
 	int err, i, k;
 
 	printk("UBI2 Init!\n");
+
+	//TODO remove, force a ubi.mtd=1 param as this breakd runnung uml under
+	//gdb
+	ubi_mtd_param_parse("1", NULL);
+	
 
 	/* Ensure that EC and VID headers have correct size */
 	BUILD_BUG_ON(sizeof(struct ubi_ec_hdr) != 64);

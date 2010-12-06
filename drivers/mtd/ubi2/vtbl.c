@@ -748,8 +748,7 @@ static int init_volumes(struct ubi_device *ubi,
  * @ubi: UBI device description object
  *
  * This function allocates volume description object for the layout volume.
- * Returns pointer to layout volume object in case of success and NULL on
- * failure.
+ * Returns -ENOMEM if unable to allocate memory.
  */
 static int init_layout_volume(struct ubi_device *ubi)
 {
@@ -772,6 +771,42 @@ static int init_layout_volume(struct ubi_device *ubi)
 	lvol->used_bytes =
 		(long long)lvol->used_ebs * (ubi->leb_size - lvol->data_pad);
 	lvol->vol_id = UBI_LAYOUT_VOLUME_ID;
+	lvol->ref_count = 1;
+	ubi->volumes[vol_id2idx(ubi, lvol->vol_id)] = lvol;
+	ubi->vol_count += 1;
+	lvol->ubi = ubi;
+
+	return 0;
+}
+
+/**
+ * init_pmap_volume - initialize volume information for pmap volume.
+ * @ubi: UBI device description object
+ *
+ * This function allocates volume description object for the pmap volume.
+ * Returns -ENOMEM if unable to allocate memory.
+ */
+static int init_pmap_volume(struct ubi_device *ubi)
+{
+	struct ubi_volume *lvol;
+
+	/* And add the layout volume */
+	lvol = kzalloc(sizeof(struct ubi_volume), GFP_KERNEL);
+	if (!lvol)
+		return -ENOMEM;
+
+	lvol->reserved_pebs = UBI_PMAP_VOLUME_EBS;
+	lvol->dleb_offset = UBI_PMAP_VOLUME_DLEB_OFFSET;
+	lvol->alignment = 1;
+	lvol->vol_type = UBI_DYNAMIC_VOLUME;
+	lvol->name_len = sizeof(UBI_PMAP_VOLUME_NAME) - 1;
+	memcpy(lvol->name, UBI_PMAP_VOLUME_NAME, lvol->name_len + 1);
+	lvol->usable_leb_size = ubi->leb_size;
+	lvol->used_ebs = lvol->reserved_pebs;
+	lvol->last_eb_bytes = lvol->reserved_pebs;
+	lvol->used_bytes =
+		(long long)lvol->used_ebs * (ubi->leb_size - lvol->data_pad);
+	lvol->vol_id = UBI_PMAP_VOLUME_ID;
 	lvol->ref_count = 1;
 	ubi->volumes[vol_id2idx(ubi, lvol->vol_id)] = lvol;
 	ubi->vol_count += 1;
@@ -896,9 +931,9 @@ static int check_scanning_info(const struct ubi_device *ubi,
  * ubi_read_volume_table - read the volume table.
  * @ubi: UBI device description object
  *
- * This function reads volume table, checks it, recover from errors if needed,
- * or creates it if needed. Returns zero in case of success and a negative
- * error code in case of failure.
+ * This function reads volume and layout tables, checks them, recover from 
+ * errors if needed or creates them if needed. Returns zero in case of success
+ * and a negative error code in case of failure.
  */
 //int ubi_read_volume_table(struct ubi_device *ubi, struct ubi_scan_info *si)
 int ubi_read_volume_table(struct ubi_device *ubi)
@@ -964,6 +999,13 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	if (err)
 		goto out_free;
 
+	/*
+ 	 * As layout volume, initialise the pmap volume 
+	 */
+	err = init_pmap_volume(ubi);
+	if (err)
+		goto out_free;
+
 	/* 
 	 * Process the layout volume, which is located at the start of the
 	 * Logical device. If the layout volume is found to be corrupted,
@@ -979,6 +1021,8 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	}
 
 	ubi->avail_pebs = ubi->good_peb_count - ubi->corr_peb_count;
+
+	// TODO - Process the pmap volume and build the ubi->peb_map
 
 	/*
 	 * The layout volume is OK, initialize the corresponding in-RAM data

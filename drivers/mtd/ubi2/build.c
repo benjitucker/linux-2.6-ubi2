@@ -948,6 +948,11 @@ int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num, int vid_hdr_offset)
 		goto out_free;
 
 	err = -ENOMEM;
+	ubi->peb_map = vmalloc(ubi->peb_count * (sizeof struct ubi_pmap));
+	if (!ubi->peb_map)
+		goto out_free;
+	memset(ubi->peb_map, 0, ubi->peb_count * (sizeof struct ubi_pmap));
+
 	ubi->peb_buf1 = vmalloc(ubi->peb_size);
 	if (!ubi->peb_buf1)
 		goto out_free;
@@ -1040,6 +1045,7 @@ out_detach:
 out_free:
 	vfree(ubi->peb_buf1);
 	vfree(ubi->peb_buf2);
+	vfree(ubi->peb_pmap);
 #ifdef CONFIG_MTD_UBI_DEBUG_PARANOID
 	vfree(ubi->dbg_peb_buf);
 #endif
@@ -1113,6 +1119,7 @@ int ubi_detach_mtd_dev(int ubi_num, int anyway)
 	put_mtd_device(ubi->mtd);
 	vfree(ubi->peb_buf1);
 	vfree(ubi->peb_buf2);
+	vfree(ubi->peb_map);
 #ifdef CONFIG_MTD_UBI_DEBUG_PARANOID
 	vfree(ubi->dbg_peb_buf);
 #endif

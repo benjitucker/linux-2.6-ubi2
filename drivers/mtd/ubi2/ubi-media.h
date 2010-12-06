@@ -313,6 +313,19 @@ struct ubi_vid_hdr {
 #define UBI_LAYOUT_VOLUME_COMPAT UBI_COMPAT_REJECT
 #define UBI_LAYOUT_VOLUME_DLEB_OFFSET 0
 
+/* The pmap volume contains the PEB mappping table and comes after the layout
+ * volume
+ */
+
+#define UBI_PMAP_VOLUME_ID       (UBI_LAYOUT_VOUME_ID + 1)
+#define UBI_PMAP_VOLUME_TYPE   UBI_VID_DYNAMIC
+#define UBI_PMAP_VOLUME_ALIGN  1
+#define UBI_PMAP_VOLUME_EBS    2
+#define UBI_PMAP_VOLUME_NAME   "pmap volume"
+#define UBI_PMAP_VOLUME_COMPAT UBI_COMPAT_REJECT
+#define UBI_PMAP_VOLUME_DLEB_OFFSET \
+	(UBI_LAYOUT_VOLUME_DLEB_OFFSET + UBI_LAYOUT_VOLUME_EBS)
+
 /* The maximum number of volumes per one UBI device */
 #define UBI_MAX_VOLUMES 128
 
@@ -376,6 +389,15 @@ struct ubi_vtbl_record {
 	__u8    flags;
 	__u8    padding[23];
 	__be32  crc;
+} __attribute__ ((packed));
+
+
+// TODO comment
+/* Volume physical erase block to volume number and leb number mapping */
+struct ubi_pmap_record {
+	__be16  leb;
+	__u8    vol_id;
+	__u8    flags;
 } __attribute__ ((packed));
 
 #endif /* !__UBI_MEDIA_H__ */

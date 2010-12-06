@@ -484,6 +484,44 @@ Need to implementation volume update in much the same way as UBI1. Check the
 volume update marker at attach time.
 
 
+Volumes
+=======
+
+Volumes in UBI2 are simply areas of Logical space. The entire logical space of
+the device to carved up into volumes. Volumes always occupy logical space at 
+the beginning of the logical space and run consecutively without gaps and 
+spare space is always filled with FF's i.e. erased.
+
+Volume creation is quick any easy as it involves simply carving off the next 
+chunk of logical space.
+
+Volume deletion can be expensive as:
+ 1. it has to erase all LEBs in the volume
+ 2. it has to shift all other volumes to remove the gap created by the removal.
+
+Volume resize is expensive as:
+ 1. other volumes have to be shifted to make space for the new volume size
+ 2. LEBs are erased.
+
+MAYBE THIS IS NOT THE WAY TO GO!!!
+
+
+Volumes (2nd idea)
+==================
+
+The volumes table includes a mapping table (quite large 10's of Kb) that maps
+every PEB of the device to a vol_id/LEB number (the start of the chain to the
+LEB that is).
+This mapping table is quite static and need only be updated when a volume is
+added/deleted or resized, or if a PEB is declared bad/erronious.
+This solution has some benefits:
+	- Quick lookup of PEB given an vol_id/LEB
+	- No messy moving of volumes when deleted, added or resized.
+	- Deals with the bad/erronous PEBs too.
+This is a bit like the UBI1 eba_tbl, except we do the chaining too (map/unmap
+is not handled by the eba_tbl).
+
+
 Bad PEBs
 ========
 
@@ -515,6 +553,10 @@ Header for the head of the list.
 	- Maybe scope for putting the LLP Header in a different (the next)
 		PEB LLP Header sub-pages.
 
+THIS MAY NOT BE THE BEST WAY. See bad block skipping and the "Erronious PEB"
+discussion below.
+
+
 Data redundancy
 ===============
 
@@ -527,6 +569,29 @@ of the payload data (halves storage capacity immediately) or of the list chain.
 
 OR, use a similar mechanism to the volume table, for every page. This would
 ensure that data pages could not be partially written.
+
+Another thought, if three copies of data are written then we can recover many
+bit errors. May be worth doing this for LLP Headers, instead of crc.
+
+
+Erronious PEBs
+==============
+
+When PEBs are really bad, they will hold no data at all. We cannot use the PEB
+for an LLP chain at all.
+Maybe, instead of the above description for handling worn out blocks, we should
+have a simple bad block skip mechanism. The bad block table can be held with the
+volume information and for ease of use, PEB numbers that are known to be bad 
+will not be chosen. 
+The start of LEB chains will no longer be the PEB index, but adjusted PEB index
+based on the bad block skipping.
+
+PEB 123 -> chain -> LEB 123 payload
+PEB 124 -> chain -> LEB 124 payload
+PEB 125 BAD!!
+PEB 126 -> chain -> LEB 125 payload
+PEB 127 -> chain -> LEB 126 payload
+
 
 
 Include ECC error correction

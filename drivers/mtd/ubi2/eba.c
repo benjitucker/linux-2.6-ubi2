@@ -312,6 +312,64 @@ static void leb_write_unlock(struct ubi_device *ubi, int vol_id, int lnum)
 }
 
 /**
+ * ubi_eba_erase_leb - immediately erase logical eraseblock.
+ * @ubi: UBI device description object
+ * @vol: volume description object
+ * @lnum: logical eraseblock number
+ *
+ * This function erases logical eraseblock @lnum immediately. This should be
+ * used to completely obiterate the LEB when releaseing the volume.
+ * This finction removes the LLP chain that represents the LEB.
+ * Returns zero in case of success and a negative error code in case of 
+ * failure.
+ */
+int ubi_eba_erase_leb(struct ubi_device *ubi, struct ubi_volume *vol,
+		      int lnum)
+{
+	int err, pnum, vol_id = vol->vol_id;
+
+	if (ubi->ro_mode)
+		return -EROFS;
+
+	err = leb_write_lock(ubi, vol_id, lnum);
+	if (err)
+		return err;
+
+	/* In this initial simple version the leb number = the peb number */
+	pnum = lnum + vol->dleb_offset;
+
+	//TODO - 
+	/* check our data and check for empty LEB. If it is empty then we do
+	 * not need to erase.
+	 */
+	//if (is_empty(vol, lnum))
+	//	goto out_unlock;
+
+	dbg_eba("erase LEB %d:%d, PEB %d", vol_id, lnum, pnum);
+
+	// just erase the PEB
+	err = ubi_io_sync_erase(ubi, pnum, 0);
+	if (err < 0)
+		goto out_unlock;
+
+	// Ignore the number of erasures
+	err = 0;
+
+	// TODO - 
+	/* we will need to restore the LLP header to the erased PEB if the 
+	 * it is part a chain
+	 */
+	
+	// TODO -
+	/* we have to follow the PEB chain, erasing all elements */
+
+out_unlock:
+	leb_write_unlock(ubi, vol_id, lnum);
+	return err;
+}
+
+
+/**
  * ubi_eba_unmap_leb - un-map logical eraseblock.
  * @ubi: UBI device description object
  * @vol: volume description object
@@ -961,6 +1019,134 @@ write_error:
 	if (err || ++tries > UBI_IO_RETRIES) {
 		ubi_ro_mode(ubi);
 		goto out_leb_unlock;
+	}
+
+	vid_hdr->sqnum = cpu_to_be64(next_sqnum(ubi));
+	ubi_msg("try another PEB");
+	goto retry;
+}
+
+/**
+ * ubi_eba_move_leb - move logical eraseblock.
+ * @ubi: UBI device description object
+ * @vol: volume description object
+ * @lnum: logical eraseblock number
+ * @delta: offset to move the LEB. in blocks
+ *
+ * This function moves logical eraseblock delta blocks within the logical
+ * space.
+ *   o %0 in case of success;
+ * TODO - consider these error conditions
+ *   o %MOVE_CANCEL_RACE, %MOVE_TARGET_WR_ERR, %MOVE_CANCEL_BITFLIPS, etc;
+ *   o a negative error code in case of failure.
+ */
+int ubi_eba_move_leb(struct ubi_device *ubi, struct ubi_volume *vol,
+			      int lnum, int delta)
+{
+	int err, pnum, tries = 0, vol_id = vol->vol_id;
+	struct ubi_vid_hdr *vid_hdr;
+
+	if (ubi->ro_mode)
+		return -EROFS;
+
+	// TODO - locking???, write lock and read lock??
+	err = leb_write_lock(ubi, vol_id, lnum);
+	if (err)
+		return err;
+
+//	pnum = vol->eba_tbl[lnum];
+	/* In this initial simple version the leb number = the peb number */
+	pnum = lnum + vol->dleb_offset;
+
+	if (pnum >= 0) {
+		dbg_eba("write %d bytes at offset %d of LEB %d:%d, PEB %d",
+			len, offset, vol_id, lnum, pnum);
+
+		err = ubi_io_write_data(ubi, buf, pnum, offset, len);
+		if (err) {
+			ubi_warn("failed to write data to PEB %d", pnum);
+			if (err == -EIO && ubi->bad_allowed)
+				err = recover_peb(ubi, pnum, vol_id, lnum, buf,
+						  offset, len);
+			if (err)
+				ubi_ro_mode(ubi);
+		}
+		leb_write_unlock(ubi, vol_id, lnum);
+		return err;
+	}
+	
+// TODO - we should never get to this point now
+	
+	/*
+	 * The logical eraseblock is not mapped. We have to get a free physical
+	 * eraseblock and write the volume identifier header there first.
+	 */
+	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
+	if (!vid_hdr) {
+		leb_write_unlock(ubi, vol_id, lnum);
+		return -ENOMEM;
+	}
+
+	vid_hdr->vol_type = UBI_VID_DYNAMIC;
+	vid_hdr->sqnum = cpu_to_be64(next_sqnum(ubi));
+	vid_hdr->vol_id = cpu_to_be32(vol_id);
+	vid_hdr->lnum = cpu_to_be32(lnum);
+	vid_hdr->compat = ubi_get_compat(ubi, vol_id);
+	vid_hdr->data_pad = cpu_to_be32(vol->data_pad);
+
+retry:
+	pnum = ubi_wl_get_peb(ubi, dtype);
+	if (pnum < 0) {
+		ubi_free_vid_hdr(ubi, vid_hdr);
+		leb_write_unlock(ubi, vol_id, lnum);
+		return pnum;
+	}
+
+	dbg_eba("write VID hdr and %d bytes at offset %d of LEB %d:%d, PEB %d",
+		len, offset, vol_id, lnum, pnum);
+
+	err = ubi_io_write_vid_hdr(ubi, pnum, vid_hdr);
+	if (err) {
+		ubi_warn("failed to write VID header to LEB %d:%d, PEB %d",
+			 vol_id, lnum, pnum);
+		goto write_error;
+	}
+
+	if (len) {
+		err = ubi_io_write_data(ubi, buf, pnum, offset, len);
+		if (err) {
+			ubi_warn("failed to write %d bytes at offset %d of "
+				 "LEB %d:%d, PEB %d", len, offset, vol_id,
+				 lnum, pnum);
+			goto write_error;
+		}
+	}
+
+	vol->eba_tbl[lnum] = pnum;
+
+	leb_write_unlock(ubi, vol_id, lnum);
+	ubi_free_vid_hdr(ubi, vid_hdr);
+	return 0;
+
+write_error:
+	if (err != -EIO || !ubi->bad_allowed) {
+		ubi_ro_mode(ubi);
+		leb_write_unlock(ubi, vol_id, lnum);
+		ubi_free_vid_hdr(ubi, vid_hdr);
+		return err;
+	}
+
+	/*
+	 * Fortunately, this is the first write operation to this physical
+	 * eraseblock, so just put it and request a new one. We assume that if
+	 * this physical eraseblock went bad, the erase code will handle that.
+	 */
+	err = ubi_wl_put_peb(ubi, pnum, 1);
+	if (err || ++tries > UBI_IO_RETRIES) {
+		ubi_ro_mode(ubi);
+		leb_write_unlock(ubi, vol_id, lnum);
+		ubi_free_vid_hdr(ubi, vid_hdr);
+		return err;
 	}
 
 	vid_hdr->sqnum = cpu_to_be64(next_sqnum(ubi));

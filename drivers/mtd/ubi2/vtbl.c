@@ -70,6 +70,7 @@ static void paranoid_vtbl_check(const struct ubi_device *ubi);
 
 /* Empty volume table record */
 static struct ubi_vtbl_record empty_vtbl_record;
+static struct ubi_vtbl_record empty_pmap_record;
 
 /**
  * ubi_change_vtbl_record - change volume table record.
@@ -170,14 +171,17 @@ int ubi_vtbl_rename_volumes(struct ubi_device *ubi,
  * vtbl_check - check if volume table is not corrupted and sensible.
  * @ubi: UBI device description object
  * @vtbl: volume table
+ * @pmap: PEB map
  *
- * This function returns zero if @vtbl is all right, %1 if CRC is incorrect,
- * and %-EINVAL if it contains inconsistent data.
+ * This function returns zero if @vtbl and @pmap are all right, %1 if CRC is
+ * incorrect, and %-EINVAL if either contains inconsistent data.
  */
 static int vtbl_check(const struct ubi_device *ubi,
-		      const struct ubi_vtbl_record *vtbl)
+		      const struct ubi_vtbl_record *vtbl,
+		      const struct ubi_pmap_record *pmap)
 {
 	int i, n, reserved_pebs, alignment, data_pad, vol_type, name_len;
+	int peb, leb, vol_id, flags;
 	int upd_marker, err;
 	uint32_t crc;
 	const char *name;
@@ -284,11 +288,59 @@ static int vtbl_check(const struct ubi_device *ubi,
 		}
 	}
 
+	/* Checks that the pmap records are sensible */
+	for (i = 0; i < ubi->pmap_slots; i++) {
+
+		peb = be32_to_cpu(pmap[i].peb);
+		leb = be32_to_cpu(pmap[i].leb);
+		vol_id = be32_to_cpu(pmap[i].vol_id);
+		flags = vtbl[i].flags;
+
+		crc = crc32(UBI_CRC32_INIT, &pmap[i], UBI_PMAP_RECORD_SIZE_CRC);
+		if (be32_to_cpu(pmap[i].crc) != crc) {
+			ubi_err("bad pmap CRC at record %u: %#08x, not %#08x",
+				 i, crc, be32_to_cpu(pmap[i].crc));
+			ubi_dbg_dump_pmap_record(&pmap[i], i);
+			return 1;
+		}
+
+		/* records should be in order of PEB */
+		if (i > 0) {
+			if (pmap[i].peb <= pmap[i-1].peb) {
+				err = 13;
+				goto bad_pmap;
+			}
+		}
+
+		if (peb < 0 || leb < 0) {
+			err = 14;
+			goto bad_pmap;
+		}
+
+		if (flags & ~(UBI_PEB_FREE | UBI_PEB_BAD)) {
+			err = 15;
+			goto bad_pmap;
+		}
+
+		if (vol_id2idx(ubi, vol_id) > 
+			ubi->vtbl_slots + UBI_INT_VOL_COUNT) {
+			err = 16;
+			goto bad_pmap;
+		}
+	}
+	
+
 	return 0;
 
 bad:
 	ubi_err("volume table check failed: record %d, error %d", i, err);
 	ubi_dbg_dump_vtbl_record(&vtbl[i], i);
+	return -EINVAL;
+
+bad_pmap:
+	ubi_err("volume table check failed on pmap: record %d, error %d",
+		 i, err);
+	ubi_dbg_dump_pmap_record(&pmap[i], i);
 	return -EINVAL;
 }
 
@@ -298,15 +350,16 @@ bad:
  * @si: scanning information
  * @copy: number of the volume table copy
  * @vtbl: contents of the volume table
+ * @pmap_tbl: contents of the pmap table
  *
  * This function returns zero in case of success and a negative error code in
  * case of failure.
  */
 //static int create_vtbl(struct ubi_device *ubi, struct ubi_scan_info *si,
 static int create_vtbl(struct ubi_device *ubi,
-		       int copy, void *vtbl)
+		       int copy, void *vtbl, void *pmap_tbl)
 {
-	int err, tries = 0;
+	int leb, err, tries = 0;
 //	static struct ubi_vid_hdr *vid_hdr;
 //	struct ubi_scan_volume *sv;
 //	struct ubi_scan_leb *new_seb, *old_seb = NULL;
@@ -334,6 +387,8 @@ static int create_vtbl(struct ubi_device *ubi,
 		old_seb = ubi_scan_find_seb(sv, copy);
 #endif
 
+	leb = copy * UBI_LAYOUT_VOLUME_EBS_PER_COPY;
+	
 retry:
 #if 0
 	new_seb = ubi_scan_get_free_peb(ubi, si);
@@ -362,16 +417,32 @@ retry:
 	//err = ubi_io_write_data(ubi, vtbl, new_seb->pnum, 0, ubi->vtbl_size);
 
 	//TODO - use the write function of our new logical list API
-	
-	/* Write the layout volume contents */
-	err = ubi_eba_unmap_leb(ubi, layout_vol, copy);
+
+	//TODO - what if these writes find bad blocks? the code will try to
+	//update the volume table which will be locked fro writing already	
+
+	/* Write the vtbl contents */
+	err = ubi_eba_unmap_leb(ubi, layout_vol, leb);
 	if (err)
 		goto write_error;
 
 	err = ubi_eba_write_leb(
-		ubi, layout_vol, copy, vtbl, 0, ubi->vtbl_size, UBI_LONGTERM);
+		ubi, layout_vol, leb, vtbl, 0, ubi->vtbl_size, UBI_LONGTERM);
 	if (err)
 		goto write_error;
+
+	/* Write the pmap contents */
+	err = ubi_eba_unmap_leb(ubi, layout_vol, leb+1);
+	if (err)
+		goto write_error;
+
+	err = ubi_eba_write_leb(
+		ubi, layout_vol, leb+1, pmap_tbl, 0, ubi->pmap_size, UBI_LONGTERM);
+	if (err)
+		goto write_error;
+
+	// TODO - along with scanning for the volume table, we need to write it to
+	// several locations incase the write failed.
 
 #if 0
 	/*
@@ -386,16 +457,15 @@ retry:
 	return err;
 
 write_error:
-#if 0
+#if 0	// TODO - need some design around this area
 	if (err == -EIO && ++tries <= 5) {
 		/*
 		 * Probably this physical eraseblock went bad, try to pick
 		 * another one.
 		 */
-		list_add(&new_seb->u.list, &si->erase);
+		
 		goto retry;
 	}
-	kfree(new_seb);
 #endif
 out_free:
 //	ubi_free_vid_hdr(ubi, vid_hdr);
@@ -408,49 +478,52 @@ out_free:
  * @ubi: UBI device description object
  *
  * This function is responsible for reading the layout volume, ensuring it is
- * not corrupted, and recovering from corruptions if needed. Returns volume
- * table in case of success and a negative error code in case of failure.
+ * not corrupted, and recovering from corruptions if needed. Returns zero
+ * in case of success and a negative error code in case of failure.
  */
-static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi)
+static int process_lvol(struct ubi_device *ubi)
 {
 	int err;
 	int i;
-	struct ubi_vtbl_record *leb[UBI_LAYOUT_VOLUME_EBS] = { NULL, NULL };
-	int leb_corrupted[UBI_LAYOUT_VOLUME_EBS] = {1, 1};
+	struct ubi_vtbl_record *leb[UBI_LAYOUT_VOLUME_COPIES] = { NULL, NULL };
+	struct ubi_pmap_record *leb_pmap[UBI_LAYOUT_VOLUME_COPIES] = { NULL, NULL };
+	int copy_corrupted[UBI_LAYOUT_VOLUME_COPIES] = {1, 1};
 	struct ubi_volume *layout_vol;
 
 	layout_vol = ubi->volumes[vol_id2idx(ubi, UBI_LAYOUT_VOLUME_ID)];
 	ubi_assert(layout_vol != NULL);
 
 	/*
-	 * UBI goes through the following steps when it changes the layout
-	 * volume:
-	 * a. erase LEB 0;
-	 * b. write new data to LEB 0;
-	 * c. erase LEB 1;
-	 * d. write new data to LEB 1.
+	 * UBI goes through the following steps when it changes the two copies 
+	 * of the layout volume:
+	 * a. erase copy 0;
+	 * b. write new data to copy 0;
+	 * c. erase copy 1;
+	 * d. write new data to copy 1.
 	 *
-	 * Before the change, both LEBs contain the same data.
+	 * Before the change, both copies contain the same data.
 	 *
-	 * Due to unclean reboots, the contents of LEB 0 may be lost, but there
-	 * should LEB 1. So it is OK if LEB 0 is corrupted while LEB 1 is not.
-	 * Similarly, LEB 1 may be lost, but there should be LEB 0. And
-	 * finally, unclean reboots may result in a situation when neither LEB
-	 * 0 nor LEB 1 are corrupted, but they are different. In this case, LEB
+	 * Due to unclean reboots, the contents of copy 0 may be lost, but there
+	 * should copy 1. So it is OK if copy 0 is corrupted while copy 1 is not.
+	 * Similarly, copy 1 may be lost, but there should be copy 0. And
+	 * finally, unclean reboots may result in a situation when neither copy 
+	 * 0 nor copy 1 are corrupted, but they are different. In this case, copy
 	 * 0 contains more recent information.
 	 *
-	 * So the plan is to first check LEB 0. Then
-	 * a. if LEB 0 is OK, it must be containing the most recent data; then
-	 *    we compare it with LEB 1, and if they are different, we copy LEB
-	 *    0 to LEB 1;
-	 * b. if LEB 0 is corrupted, but LEB 1 has to be OK, and we copy LEB 1
-	 *    to LEB 0.
+	 * So the plan is to first check copy 0. Then
+	 * a. if copy 0 is OK, it must be containing the most recent data; then
+	 *    we compare it with copy 1, and if they are different, we copy 
+	 *    0 to 1;
+	 * b. if copy 0 is corrupted, but copy 1 has to be OK, and we copy 1
+	 *    to 0.
 	 */
 
 	dbg_gen("check layout volume");
 
-	/* Read both LEB 0 and LEB 1 into memory */
-	for (i = 0; i < UBI_LAYOUT_VOLUME_EBS; ++i) {
+	/* Read both copies of the vtbl and pmap into memory */
+	for (i = 0; i < UBI_LAYOUT_VOLUME_COPIES; 
+		i += UBI_LAYOUT_VOLUME_EBS_PER_COPY) {
+
 		leb[i] = vmalloc(ubi->vtbl_size);
 		if (!leb[i]) {
 			err = -ENOMEM;
@@ -458,8 +531,24 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi)
 		}
 		memset(leb[i], 0, ubi->vtbl_size);
 
+		leb_pmap[i] = vmalloc(ubi->pmap_size);
+		if (!leb_pmap[i]) {
+			err = -ENOMEM;
+			goto out_free;
+		}
+		memset(leb_pmap[i], 0, ubi->pmap_size);
+
+		/* read the vtbl leb */
 		err = ubi_eba_read_leb(
 			ubi, layout_vol, i, leb[i], 0, ubi->vtbl_size, 0);
+		if (err) {
+			/* If the read failed, fall back to the other copy */
+			err = 0;
+		}
+
+		/* read the pmap leb that follows the vtbl */
+		err = ubi_eba_read_leb(
+			ubi, layout_vol, i+1, pmap_leb[i], 0, ubi->pmap_size, 0);
 		if (err) {
 			/* If the read failed, fall back to the other copy */
 			err = 0;
@@ -496,20 +585,24 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi)
 #endif
 
 	err = -EINVAL;
-	if (leb[0]) {
-		leb_corrupted[0] = vtbl_check(ubi, leb[0]);
-		if (leb_corrupted[0] < 0)
+	if (leb[0] && pmap_leb[0]) {
+		copy_corrupted[0] = vtbl_check(ubi, leb[0], pmap_leb[0]);
+		if (copy_corrupted[0] < 0)
 			goto out_free;
 	}
 
-	if (!leb_corrupted[0]) {
+	if (!copy_corrupted[0]) {
 		/* LEB 0 is OK */
-		if (leb[1])
-			leb_corrupted[1] = memcmp(leb[0], leb[1],
-						  ubi->vtbl_size);
-		if (leb_corrupted[1]) {
+		if (leb[1] && pmap_leb[1]) {
+			if (!memcmp(leb[0], leb[1], ubi->vtbl_size) &&
+			    !memcmp(pmap_leb[0], pmap_leb[1], ubi->pmap_size)) {
+			copy_corrupted[1] = 0;
+			}
+		}
+
+		if (copy_corrupted[1]) {
 			ubi_warn("volume table copy #2 is corrupted");
-			err = create_vtbl(ubi, 1, leb[0]);
+			err = create_vtbl(ubi, 1, leb[0], pmap_leb[0]);
 			if (err)
 				goto out_free;
 			ubi_msg("volume table was restored");
@@ -517,67 +610,100 @@ static struct ubi_vtbl_record *process_lvol(struct ubi_device *ubi)
 
 		/* Both LEB 1 and LEB 2 are OK and consistent */
 		vfree(leb[1]);
-		return leb[0];
+		vfree(pmap_leb[1]);
+		ubi->vtbl = leb[0];
+		ubi->ptbl = pmap_leb[0];
+		return 0;
 	} else {
 		/* LEB 0 is corrupted or does not exist */
 		if (leb[1]) {
-			leb_corrupted[1] = vtbl_check(ubi, leb[1]);
-			if (leb_corrupted[1] < 0)
+			copy_corrupted[1] = 
+				vtbl_check(ubi, leb[1], pmap_leb[1]);
+			if (copy_corrupted[1] < 0)
 				goto out_free;
 		}
-		if (leb_corrupted[1]) {
+		if (copy_corrupted[1]) {
 			/* Both LEB 0 and LEB 1 are corrupted */
 			ubi_err("both volume tables are corrupted");
 			goto out_free;
 		}
 
 		ubi_warn("volume table copy #1 is corrupted");
-		err = create_vtbl(ubi, 0, leb[1]);
+		err = create_vtbl(ubi, 0, leb[1], pmap_leb[1]);
 		if (err)
 			goto out_free;
 		ubi_msg("volume table was restored");
 
 		vfree(leb[0]);
-		return leb[1];
+		vfree(pmap_leb[0]);
+		ubi->vtbl = leb[1];
+		ubi->ptbl = pmap_leb[1];
+		return 0;
 	}
 
 out_free:
 	vfree(leb[0]);
 	vfree(leb[1]);
-	return ERR_PTR(err);
+	vfree(pmap_leb[0]);
+	vfree(pmap_leb[1]);
+	return err;
 }
 
 /**
  * create_empty_lvol - create empty layout volume.
  * @ubi: UBI device description object
  *
- * This function returns volume table contents in case of success and a
+ * This function returns zero in case of success and a
  * negative error code in case of failure.
  */
-static struct ubi_vtbl_record *create_empty_lvol(struct ubi_device *ubi)
+static int create_empty_lvol(struct ubi_device *ubi)
 {
 	int i;
 	struct ubi_vtbl_record *vtbl;
+	struct ubi_pmap_record *pmap;
 
 	vtbl = vmalloc(ubi->vtbl_size);
 	if (!vtbl)
-		return ERR_PTR(-ENOMEM);
+		return -ENOMEM;
 	memset(vtbl, 0, ubi->vtbl_size);
+
+	pmap = vmalloc(ubi->pmap_size);
+	if (!pmap) {
+		vfree(vtbl);
+		return -ENOMEM;
+	}
+	memset(pmap, 0, ubi->pmap_size);
 
 	for (i = 0; i < ubi->vtbl_slots; i++)
 		memcpy(&vtbl[i], &empty_vtbl_record, UBI_VTBL_RECORD_SIZE);
 
-	for (i = 0; i < UBI_LAYOUT_VOLUME_EBS; i++) {
+	for (i = 0; i < ubi->pmap_slots; i++)
+		memcpy(&ptbl[i], &empty_pmap_record, UBI_PMAP_RECORD_SIZE);
+
+	/* reserve the first N PEBs for the layout volume */
+	ptbl[0].peb = 0;
+	ptbl[0].leb = 0;
+	ptbl[0].vol_id = UBI_LAYOUT_VOLUME_ID;
+	ptbl[0].flags = UBI_PMAP_INUSE;
+	ptbl[0].crc = crc32(UBI_CRC32_INIT, &ptbl[0], UBI_PMAP_RECORD_SIZE_CRC);
+
+	ptbl[1].peb = ptbl[0].peb + UBI_LAYOUT_VOLUME_SIZE;
+	ptbl[1].crc = crc32(UBI_CRC32_INIT, &ptbl[1], UBI_PMAP_RECORD_SIZE_CRC);
+
+	for (i = 0; i < UBI_LAYOUT_VOLUME_COPIES; i++) {
 		int err;
 
-		err = create_vtbl(ubi, i, vtbl);
+		err = create_vtbl(ubi, i, vtbl, ptbl);
 		if (err) {
 			vfree(vtbl);
-			return ERR_PTR(err);
+			vfree(pmap);
+			return err;
 		}
 	}
 
-	return vtbl;
+	ubi->vtbl = vtbl;
+	ubi->ptbl = ptbl;
+	return 0;
 }
 
 /**
@@ -592,12 +718,13 @@ static struct ubi_vtbl_record *create_empty_lvol(struct ubi_device *ubi)
  */
 //static int init_volumes(struct ubi_device *ubi, const struct ubi_scan_info *si,
 static int init_volumes(struct ubi_device *ubi,
-			const struct ubi_vtbl_record *vtbl)
+			const struct ubi_vtbl_record *vtbl,
+			const struct ubi_pmap_record *ptbl)
 {
 	int i, reserved_pebs = 0, dleb_offset = 0;
 	struct ubi_volume *vol;
 
-	/* Start with the layout volume as to resides at the first two dlebs */
+	/* Start with the layout volume as to resides at the first few PEBs */
 	vol = ubi->volumes[vol_id2idx(ubi, UBI_LAYOUT_VOLUME_ID)];
 	ubi_assert(vol != NULL);
 	reserved_pebs += vol->reserved_pebs;
@@ -752,15 +879,19 @@ static int init_volumes(struct ubi_device *ubi,
  */
 static int init_layout_volume(struct ubi_device *ubi)
 {
+	int i;
 	struct ubi_volume *lvol;
+	struct ubi_pmap *pmap;
 
 	/* And add the layout volume */
 	lvol = kzalloc(sizeof(struct ubi_volume), GFP_KERNEL);
 	if (!lvol)
 		return -ENOMEM;
 
+	/* Calculate the number of pebs from the block size and the size
+	 * of the (volume table + pmap records) * 2
+	 */
 	lvol->reserved_pebs = UBI_LAYOUT_VOLUME_EBS;
-	lvol->dleb_offset = UBI_LAYOUT_VOLUME_DLEB_OFFSET;
 	lvol->alignment = 1;
 	lvol->vol_type = UBI_DYNAMIC_VOLUME;
 	lvol->name_len = sizeof(UBI_LAYOUT_VOLUME_NAME) - 1;
@@ -776,41 +907,20 @@ static int init_layout_volume(struct ubi_device *ubi)
 	ubi->vol_count += 1;
 	lvol->ubi = ubi;
 
-	return 0;
-}
-
-/**
- * init_pmap_volume - initialize volume information for pmap volume.
- * @ubi: UBI device description object
- *
- * This function allocates volume description object for the pmap volume.
- * Returns -ENOMEM if unable to allocate memory.
- */
-static int init_pmap_volume(struct ubi_device *ubi)
-{
-	struct ubi_volume *lvol;
-
-	/* And add the layout volume */
-	lvol = kzalloc(sizeof(struct ubi_volume), GFP_KERNEL);
-	if (!lvol)
-		return -ENOMEM;
-
-	lvol->reserved_pebs = UBI_PMAP_VOLUME_EBS;
-	lvol->dleb_offset = UBI_PMAP_VOLUME_DLEB_OFFSET;
-	lvol->alignment = 1;
-	lvol->vol_type = UBI_DYNAMIC_VOLUME;
-	lvol->name_len = sizeof(UBI_PMAP_VOLUME_NAME) - 1;
-	memcpy(lvol->name, UBI_PMAP_VOLUME_NAME, lvol->name_len + 1);
-	lvol->usable_leb_size = ubi->leb_size;
-	lvol->used_ebs = lvol->reserved_pebs;
-	lvol->last_eb_bytes = lvol->reserved_pebs;
-	lvol->used_bytes =
-		(long long)lvol->used_ebs * (ubi->leb_size - lvol->data_pad);
-	lvol->vol_id = UBI_PMAP_VOLUME_ID;
-	lvol->ref_count = 1;
-	ubi->volumes[vol_id2idx(ubi, lvol->vol_id)] = lvol;
-	ubi->vol_count += 1;
-	lvol->ubi = ubi;
+	/* Setup the PEB map for the layout volume.W hardcode the first N
+	 * PEBS for the layout volume.
+	 * TODO - We need to scan over bad PEBs to find the layout volume
+	 * to avoid bad PEBs in the layout volume
+	 * If we go with this for now, the layout volume processing will
+	 * eventually correct us, but it is still dangerous,
+	 */
+	for (i = 0; i < lvol->reserved_pebs; ++i) {
+		pmap = &ubi->peb_map[i];
+		pmap->vol = lvol;
+		pmap->leb = i;
+		pmap->inuse = 1;
+		pmap->bad = 0;
+	}
 
 	return 0;
 }
@@ -943,6 +1053,7 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 //	struct ubi_scan_volume *sv;
 
 	empty_vtbl_record.crc = cpu_to_be32(0xf116c36b);
+	empty_pmap_record.crc = cpu_to_be32(0xf116c36b);//TODO - work out the crc
 
 	/*
 	 * The number of supported volumes is limited by the eraseblock size
@@ -954,6 +1065,17 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 
 	ubi->vtbl_size = ubi->vtbl_slots * UBI_VTBL_RECORD_SIZE;
 	ubi->vtbl_size = ALIGN(ubi->vtbl_size, ubi->min_io_size);
+
+	/*
+	 * The number of supported PEB Maps is limited by the eraseblock size
+	 * and by the UBI_MAX_PMAP constant.
+	 */
+	ubi->pmap_slots = ubi->leb_size / UBI_PMAP_RECORD_SIZE;
+	if (ubi->pmap_slots > UBI_MAX_PMAP)
+		ubi->pmap_slots = UBI_MAX_PMAP;
+
+	ubi->pmap_size = ubi->pmap_slots * UBI_PMAP_RECORD_SIZE;
+	ubi->pmap_size = ALIGN(ubi->pmap_size, ubi->min_io_size);
 
 #if 0
 	// TODO - remove scanning information
@@ -999,25 +1121,15 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	if (err)
 		goto out_free;
 
-	/*
- 	 * As layout volume, initialise the pmap volume 
-	 */
-	err = init_pmap_volume(ubi);
-	if (err)
-		goto out_free;
-
 	/* 
 	 * Process the layout volume, which is located at the start of the
 	 * Logical device. If the layout volume is found to be corrupted,
 	 * write a new empty one.
 	 */
-	ubi->vtbl = process_lvol(ubi);
-	if (IS_ERR(ubi->vtbl)) {
-		ubi->vtbl = create_empty_lvol(ubi);
-		if (IS_ERR(ubi->vtbl)) {
-			err = PTR_ERR(ubi->vtbl);
+	if (process_lvol(ubi)) {
+		err = create_empty_lvol(ubi);
+		if (err)
 			goto out_free;
-		}
 	}
 
 	ubi->avail_pebs = ubi->good_peb_count - ubi->corr_peb_count;
@@ -1028,7 +1140,7 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	 * The layout volume is OK, initialize the corresponding in-RAM data
 	 * structures.
 	 */
-	err = init_volumes(ubi, ubi->vtbl);
+	err = init_volumes(ubi, ubi->vtbl, ubi->pmap);
 	if (err)
 		goto out_free;
 

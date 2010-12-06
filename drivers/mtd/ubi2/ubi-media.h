@@ -303,34 +303,35 @@ struct ubi_vid_hdr {
  */
 #define UBI_INTERNAL_VOL_START (0x7FFFFFFF - 4096)
 
+/* The maximum number of volumes per one UBI device */
+#define UBI_MAX_VOLUMES 128
+
+/* The maximun number of Peb MAP (pmap) entries */
+#define UBI_MAX_PMAP 4096
+
 /* The layout volume contains the volume table */
 
 #define UBI_LAYOUT_VOLUME_ID     UBI_INTERNAL_VOL_START
 #define UBI_LAYOUT_VOLUME_TYPE   UBI_VID_DYNAMIC
 #define UBI_LAYOUT_VOLUME_ALIGN  1
-#define UBI_LAYOUT_VOLUME_EBS    2
+#define UBI_LAYOUT_VOLUME_EBS     4
+#define UBI_LAYOUT_VOLUME_COPIES  2
+#define UBI_LAYOUT_VOLUME_SIZE    4
 #define UBI_LAYOUT_VOLUME_NAME   "layout volume"
 #define UBI_LAYOUT_VOLUME_COMPAT UBI_COMPAT_REJECT
-#define UBI_LAYOUT_VOLUME_DLEB_OFFSET 0
 
-/* The pmap volume contains the PEB mappping table and comes after the layout
- * volume
- */
-
-#define UBI_PMAP_VOLUME_ID       (UBI_LAYOUT_VOUME_ID + 1)
-#define UBI_PMAP_VOLUME_TYPE   UBI_VID_DYNAMIC
-#define UBI_PMAP_VOLUME_ALIGN  1
-#define UBI_PMAP_VOLUME_EBS    2
-#define UBI_PMAP_VOLUME_NAME   "pmap volume"
-#define UBI_PMAP_VOLUME_COMPAT UBI_COMPAT_REJECT
-#define UBI_PMAP_VOLUME_DLEB_OFFSET \
-	(UBI_LAYOUT_VOLUME_DLEB_OFFSET + UBI_LAYOUT_VOLUME_EBS)
-
-/* The maximum number of volumes per one UBI device */
-#define UBI_MAX_VOLUMES 128
+/* Number of erase blocks in each copy of the layout volume */
+#define UBI_LAYOUT_VOLUME_EBS_PER_COPY \
+	(UBI_LAYOUT_VOLUME_EBS / UBI_LAYOUT_VOLUME_COPIES)
 
 /* The maximum volume name length */
 #define UBI_VOL_NAME_MAX 127
+
+/* Size of the peb map table record */
+#define UBI_PMAP_RECORD_SIZE sizeof(struct ubi_pmap_record)
+
+/* Size of the peb map table record without the ending CRC */
+#define UBI_PMAP_RECORD_SIZE_CRC (UBI_PMAP_RECORD_SIZE - sizeof(__be32))
 
 /* Size of the volume table record */
 #define UBI_VTBL_RECORD_SIZE sizeof(struct ubi_vtbl_record)
@@ -393,11 +394,28 @@ struct ubi_vtbl_record {
 
 
 // TODO comment
-/* Volume physical erase block to volume number and leb number mapping */
+/* Volume physical erase block to volume number and leb number mapping
+ * Also stored in the layout volume, UBI_MAX_PMAP items are stored.
+ * These hold the information that maps volume-leb to peb that start the 
+ * chain to the leb payload. There are a limited number of these stored
+ * so each one defines the start of a randge of leb to peb's where the
+ * lebs are arranged in order of increasing peb.
+ * @peb the first peb in the range
+ * @leb the leb number at the start of the range
+ * @vol_id of the volume that owns the range.
+ * @flags UBI_PEB_INUSE if the peb is not used in any volume
+ * 	  UBI_PEB_BAD if it is a bad PEB and should not be used
+ * The pmap_records are arranged in increasing order of PEB. 
+ * The UBI_MAP_PMAP limits the number of bad blocks that can be handled
+ * by the UBI. When all the pmap_records are used, the UBI layer
+ * cannot handle any more bad blocks of volume fragmentation.
+ */
 struct ubi_pmap_record {
-	__be16  leb;
-	__u8    vol_id;
+	__be32  peb;
+	__be32  leb;
+	__be32  vol_id;
 	__u8    flags;
+	__be32  crc;
 } __attribute__ ((packed));
 
 #endif /* !__UBI_MEDIA_H__ */

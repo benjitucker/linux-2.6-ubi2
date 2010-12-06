@@ -143,8 +143,24 @@ void ubi_dbg_dump_vtbl_record(const struct ubi_vtbl_record *r, int idx)
 }
 
 /**
+ * ubi_dbg_dump_pmap_record - dump a &struct ubi_pmap_record object.
+ * @r: the object to dump
+ * @idx: volume table index
+ */
+void ubi_dbg_dump_pmap_record(const struct ubi_pmap_record *r, int idx)
+{
+	printk(KERN_DEBUG "PEB map table record %d dump:\n", idx);
+	printk(KERN_DEBUG "\tPEB             %d\n", be32_to_cpu(r->peb));
+	printk(KERN_DEBUG "\tLEB             %d\n", be32_to_cpu(r->leb));
+	printk(KERN_DEBUG "\tVolume ID       %d\n", r->vol_id);
+	printk(KERN_DEBUG "\tflags           %d\n", r->flags);
+	printk(KERN_DEBUG "\tcrc             %#08x\n", be32_to_cpu(r->crc));
+}
+
+/**
  * ubi_dbg_dump_sv - dump a &struct ubi_scan_volume object.
  * @sv: the object to dump
+ * TODO - delete
  */
 void ubi_dbg_dump_sv(const struct ubi_scan_volume *sv)
 {

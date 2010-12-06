@@ -205,7 +205,6 @@ struct ubi_volume_desc;
  * @writers: number of users holding this volume in read-write mode
  * @exclusive: whether somebody holds this volume in exclusive mode
  *
- * @dleb_offset: the dleb offset of the start of the volume
  * @reserved_pebs: how many physical eraseblocks are reserved for this volume
  * @vol_type: volume type (%UBI_DYNAMIC_VOLUME or %UBI_STATIC_VOLUME)
  * @usable_leb_size: logical eraseblock size without padding
@@ -256,7 +255,6 @@ struct ubi_volume {
 	int writers;
 	int exclusive;
 
-	int dleb_offset;
 	int reserved_pebs;
 	int vol_type;
 	int usable_leb_size;
@@ -428,6 +426,9 @@ struct ubi_device {
 	int vtbl_slots;
 	int vtbl_size;
 	struct ubi_vtbl_record *vtbl;
+	int pmap_slots;
+	int pmap_size;
+	struct ubi_pmap_record *ptbl;
 	struct mutex device_mutex;
 
 	int max_ec;

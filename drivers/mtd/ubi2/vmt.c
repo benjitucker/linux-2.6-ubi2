@@ -190,6 +190,53 @@ static void volume_sysfs_close(struct ubi_volume *vol)
 	device_unregister(&vol->dev);
 }
 
+//TODO - comment
+static void free_logical_volume(
+	struct ubi_device *ubi, struct ubi_volume *vol)
+{	
+	// TODO - This is currently a nop
+}
+
+// Scan the existing volumes for a block of logical blocks that is
+// big enough for the new volume.
+// TODO - This is currently a primitive new volume after existing
+// vols algorithm. This code does not reuse space relinquished by
+// deleting volumes. More sophisticated solution should be used in
+// future such as best fit which resolves this issue.
+// What about using the shifting heap code. We have to squeeze every last 
+// PEB.
+// TODO - comment
+static int allocate_logical_volume(
+	struct ubi_device *ubi, struct ubi_volume *vol)
+{
+	int i, next_dleb_offset, last_dleb_offset = 0;
+	struct ubi_volume *next_vol;
+
+	/* search the regular volumes and internal ubi volumes */
+	for (i = 0; i < UBI_MAX_VOLUMES+UBI_INT_VOL_COUNT; i++) {
+		next_vol = ubi->volumes[i];
+		if (next_vol) {
+			next_dleb_offset = 
+				next_vol->dleb_offset + next_vol->reserved_pebs;
+			if (next_dleb_offset > last_dleb_offset)
+				last_dleb_offset = next_dleb_offset;
+		}
+	}
+
+	/* position the volume after the last one in the logcal map */
+	vol->dleb_offset = last_dleb_offset;
+
+	dbg_gen("allocate volume %d, dleb_offset %u reserved pebs %u",
+		vol->vol_id, vol->dleb_offset, vol->reserved_pebs);
+	
+	/* check that the volume will fit */
+	// TODO - not sure if the peb_count is the corrrect count.
+	if (vol->dleb_offset + vol->reserved_pebs > ubi->peb_count)
+		return -ENOMEM;
+
+	return 0;
+}
+
 /**
  * ubi_create_volume - create volume.
  * @ubi: UBI device description object
@@ -283,10 +330,14 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	 * Finish all pending erases because there may be some LEBs belonging
 	 * to the same volume ID.
 	 */
+#if 0	// TODO - we may have to do something similar
 	err = ubi_wl_flush(ubi);
 	if (err)
 		goto out_acc;
+#endif
 
+#if 1	// TODO - disable this code when we are sure that nothing uses the
+	// eba_tbl any more
 	vol->eba_tbl = kmalloc(vol->reserved_pebs * sizeof(int), GFP_KERNEL);
 	if (!vol->eba_tbl) {
 		err = -ENOMEM;
@@ -295,6 +346,13 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 
 	for (i = 0; i < vol->reserved_pebs; i++)
 		vol->eba_tbl[i] = UBI_LEB_UNMAPPED;
+#endif
+
+	err = allocate_logical_volume(ubi, vol);
+	if (err) {
+		ubi_err("cannot allocate logical volume");
+		goto out_mapping;
+	}
 
 	if (vol->vol_type == UBI_DYNAMIC_VOLUME) {
 		vol->used_ebs = vol->reserved_pebs;
@@ -318,7 +376,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	err = cdev_add(&vol->cdev, dev, 1);
 	if (err) {
 		ubi_err("cannot add character device");
-		goto out_mapping;
+		goto out_free;
 	}
 
 	vol->dev.release = vol_release;
@@ -377,6 +435,8 @@ out_sysfs:
 	volume_sysfs_close(vol);
 out_cdev:
 	cdev_del(&vol->cdev);
+out_free:
+	free_logical_volume(ubi, vol);
 out_mapping:
 	if (do_free)
 		kfree(vol->eba_tbl);
@@ -404,6 +464,8 @@ out_unlock:
  * code in case of failure. The caller has to have the @ubi->device_mutex
  * locked.
  */
+// TODO - need to put the dleb_offset of volumes in the on-flash volume data
+//and deal with removal (thus logical device volume holes).
 int ubi_remove_volume(struct ubi_volume_desc *desc, int no_vtbl)
 {
 	struct ubi_volume *vol = desc->vol;

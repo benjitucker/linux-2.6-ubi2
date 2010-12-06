@@ -190,11 +190,50 @@ static void volume_sysfs_close(struct ubi_volume *vol)
 	device_unregister(&vol->dev);
 }
 
-//TODO - comment
+/**
+ * free_logical_volume - Shift existing volumes around to free up one.
+ * @ubi: UBI device description object
+ * @vol: volume to be removed
+ *
+ * This function frees up the logical space occupied by a volume by shifting
+ * other volumes around. This function will remove any gaps between volumes 
+ * allowing new volumes to be simply placed after others.
+ */
 static void free_logical_volume(
 	struct ubi_device *ubi, struct ubi_volume *vol)
-{	
-	// TODO - This is currently a nop
+{
+	int i, next_dleb_offset, next_log_dleb_offset;
+	struct ubi_volume *next_vol, *next_log_vol;
+
+	/* repeatidly find the next volume and shift the its logical area
+	 * up to the previous volume
+	 */
+process_next_vol:
+
+	/* Find the next volume in the logical space */
+	next_log_dleb_offset = UINT_MAX;
+	next_log_vol = NULL;
+	for (i = 0; i < UBI_MAX_VOLUMES+UBI_INT_VOL_COUNT; i++) {
+		next_vol = ubi->volumes[i];
+		if (next_vol) {
+			if (next_vol->dleb_offset > vol->dleb_offset &&
+					next_vol->dleb_offset < next_log_dleb_offset) {
+				next_log_dleb_offset = next_vol->dleb_offset;
+				next_log_vol = next_vol;
+			}
+		}
+	}
+
+	/* If we did not find any more, we are done */
+	if (!next_log_vol)
+		return;
+
+	/* Move the LEBs of the volume */
+	// TODO	
+
+	/* Repeat if we have not come to the last volume */
+	vol = next_log_vol;
+	goto process_next_vol;
 }
 
 // Scan the existing volumes for a block of logical blocks that is
@@ -498,10 +537,12 @@ int ubi_remove_volume(struct ubi_volume_desc *desc, int no_vtbl)
 	}
 
 	for (i = 0; i < vol->reserved_pebs; i++) {
-		err = ubi_eba_unmap_leb(ubi, vol, i);
+		err = ubi_eba_erase_leb(ubi, vol, i);
 		if (err)
 			goto out_err;
 	}
+
+	free_logical_volume(ubi, vol);
 
 	cdev_del(&vol->cdev);
 	volume_sysfs_close(vol);

@@ -294,6 +294,21 @@ struct ubi_volume_desc {
 	int mode;
 };
 
+/**
+ * TODO - employ an RB tree so we can quickly find the PEB for a volume/LEB
+ * struct ubi_peb_map - UBI mapping of a device PEB to volume and LEB chain.
+ * @vol: reference to the corresponding volume description object
+ * @leb: LEB number of the volume chained from this PEB
+ * @inuse: 1 if the PEB is in use in a volume
+ * @bad: 1 if the PEB is bad (worn out or erronious)
+ */
+struct ubi_pmap {
+	struct ubi_volume *vol;
+	int leb;
+	unsigned int inuse:1;
+	unsigned int bad:1;
+};
+
 struct ubi_wl_entry;
 
 /**
@@ -307,7 +322,7 @@ struct ubi_wl_entry;
  * @volumes_lock: protects @volumes, @rsvd_pebs, @avail_pebs, beb_rsvd_pebs,
  *                @beb_rsvd_level, @bad_peb_count, @good_peb_count, @vol_count,
  *                @vol->readers, @vol->writers, @vol->exclusive,
- *                @vol->ref_count, @vol->mapping and @vol->eba_tbl.
+ *                @vol->ref_count, @vol->mapping and @ubi->peb_vol_map.
  * @ref_count: count of references on the UBI device
  * @image_seq: image sequence number recorded on EC headers
  *
@@ -399,6 +414,7 @@ struct ubi_device {
 	char ubi_name[sizeof(UBI_NAME_STR)+5];
 	int vol_count;
 	struct ubi_volume *volumes[UBI_MAX_VOLUMES+UBI_INT_VOL_COUNT];
+	struct ubi_pmap *peb_map;
 	spinlock_t volumes_lock;
 	int ref_count;
 	int image_seq;
@@ -519,6 +535,8 @@ void ubi_calculate_reserved(struct ubi_device *ubi);
 int ubi_check_pattern(const void *buf, uint8_t patt, int size);
 
 /* eba.c */
+int ubi_eba_erase_leb(struct ubi_device *ubi, struct ubi_volume *vol,
+		      int lnum);
 int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 		      int lnum);
 int ubi_eba_read_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,

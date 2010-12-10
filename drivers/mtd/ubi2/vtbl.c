@@ -721,8 +721,15 @@ static int init_volumes(struct ubi_device *ubi,
 			const struct ubi_vtbl_record *vtbl,
 			const struct ubi_pmap_record *ptbl)
 {
-	int i, reserved_pebs = 0, dleb_offset = 0;
+	int i, reserved_pebs = 0;
 	struct ubi_volume *vol;
+
+	/* Process the PEB Map table */
+	for (i = 0; i < ubi->pmap_slots; i++) {
+		
+	}
+
+	/* Process the volume table */
 
 	/* Start with the layout volume as to resides at the first few PEBs */
 	vol = ubi->volumes[vol_id2idx(ubi, UBI_LAYOUT_VOLUME_ID)];
@@ -735,24 +742,11 @@ static int init_volumes(struct ubi_device *ubi,
 		if (be32_to_cpu(vtbl[i].reserved_pebs) == 0)
 			continue; /* Empty record */
 
-		/* 
-		 * Calculate the dleb offset of the start of the next volume
-		 * using the position and size of the previous volume.
-		 * In this design the reserved PEBs for a volume is equal to the
-		 * size of the volume in LEBs. We carve up the device logical 
-		 * space into the volumes so that they are but up against each 
-		 * other.
-		 * TODO - we need to put the auto-resize volume at the end (I 
-		 * think), so it can grow into any unused space
-		 */
-		dleb_offset = vol->dleb_offset + vol->reserved_pebs;
-
 		vol = kzalloc(sizeof(struct ubi_volume), GFP_KERNEL);
 		if (!vol)
 			return -ENOMEM;
 
 		vol->reserved_pebs = be32_to_cpu(vtbl[i].reserved_pebs);
-		vol->dleb_offset = dleb_offset;
 		vol->alignment = be32_to_cpu(vtbl[i].alignment);
 		vol->data_pad = be32_to_cpu(vtbl[i].data_pad);
 		vol->upd_marker = vtbl[i].upd_marker;
@@ -876,10 +870,11 @@ static int init_volumes(struct ubi_device *ubi,
  *
  * This function allocates volume description object for the layout volume.
  * Returns -ENOMEM if unable to allocate memory.
+ * TODO documet other return codes
  */
 static int init_layout_volume(struct ubi_device *ubi)
 {
-	int i;
+	int pnum, err, pebs_found;
 	struct ubi_volume *lvol;
 	struct ubi_pmap *pmap;
 
@@ -907,19 +902,37 @@ static int init_layout_volume(struct ubi_device *ubi)
 	ubi->vol_count += 1;
 	lvol->ubi = ubi;
 
-	/* Setup the PEB map for the layout volume.W hardcode the first N
-	 * PEBS for the layout volume.
-	 * TODO - We need to scan over bad PEBs to find the layout volume
-	 * to avoid bad PEBs in the layout volume
-	 * If we go with this for now, the layout volume processing will
-	 * eventually correct us, but it is still dangerous,
+	/* Setup the PEB map for the layout volume. Hardcode the first N
+	 * good PEBS for the layout volume.
+	 * We need to scan over bad PEBs to find the layout volume
+	 * to avoid bad PEBs in the layout volume. We do not want to do
+	 * a full scan, so this mini-scan looks for the first N good 
+	 * PEBs which should contain the blocks of the layout volume, where
+	 * N is the size (in blocks) of the layout volume.
+	 * Note: We do not read or check the llp headers here as that is 
+	 * handled by the volume processing function.
 	 */
-	for (i = 0; i < lvol->reserved_pebs; ++i) {
-		pmap = &ubi->peb_map[i];
-		pmap->vol = lvol;
-		pmap->leb = i;
-		pmap->inuse = 1;
-		pmap->bad = 0;
+	pebs_found = 0;
+	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+		pmap = &ubi->peb_map[pnum];
+
+		/* Skip bad physical eraseblocks */
+		err = ubi_io_is_bad(ubi, pnum);
+		if (err < 0)
+			return err;
+		else if (err) {
+			pmap->bad = 1;
+		}
+		else {
+
+			pmap->vol_id = lvol->vol_id;
+			pmap->lnum = pebs_found;
+			pmap->inuse = 1;
+			pmap->bad = 0;
+			pebs_found++;
+		}
+
+		pmap++;
 	}
 
 	return 0;
@@ -1114,7 +1127,7 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	/*
 	 * Initialise the in-RAM layout volume. We know where the layout volume
 	 * resides on the device so we can create the object without reading 
-	 * anything from flash. We will need to volume object so that we can 
+	 * anything from flash. We will need this volume object so that we can 
 	 * read the layout volume from flash.
 	 */
 	err = init_layout_volume(ubi);

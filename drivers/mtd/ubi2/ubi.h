@@ -301,8 +301,8 @@ struct ubi_volume_desc {
  * @bad: 1 if the PEB is bad (worn out or erronious)
  */
 struct ubi_pmap {
-	struct ubi_volume *vol;
-	int leb;
+	unsigned int  vol_id;
+	int lnum;
 	unsigned int inuse:1;
 	unsigned int bad:1;
 };
@@ -570,6 +570,10 @@ int ubi_io_write(struct ubi_device *ubi, const void *buf, int pnum, int offset,
 int ubi_io_sync_erase(struct ubi_device *ubi, int pnum, int torture);
 int ubi_io_is_bad(const struct ubi_device *ubi, int pnum);
 int ubi_io_mark_bad(const struct ubi_device *ubi, int pnum);
+int ubi_io_read_llp_hdr(struct ubi_device *ubi, int pnum,
+		        struct ubi_llp_hdr *llp_hdr, int verbose);
+int ubi_io_write_llp_hdr(struct ubi_device *ubi, int pnum,
+			 struct ubi_llp_hdr *llp_hdr);
 int ubi_io_read_ec_hdr(struct ubi_device *ubi, int pnum,
 		       struct ubi_ec_hdr *ec_hdr, int verbose);
 int ubi_io_write_ec_hdr(struct ubi_device *ubi, int pnum,

@@ -677,6 +677,19 @@ bad:
 	return 1;
 }
 
+/* TODO - everything */
+int ubi_io_read_llp_hdr(struct ubi_device *ubi, int pnum,
+		        struct ubi_llp_hdr *llp_hdr, int verbose)
+{
+	return 0;
+}
+
+int ubi_io_write_llp_hdr(struct ubi_device *ubi, int pnum,
+			 struct ubi_llp_hdr *llp_hdr)
+{
+	return 0;
+}
+
 /**
  * ubi_io_read_ec_hdr - read and check an erase counter header.
  * @ubi: UBI device description object

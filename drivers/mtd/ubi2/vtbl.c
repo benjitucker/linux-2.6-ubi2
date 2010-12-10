@@ -874,7 +874,7 @@ static int init_volumes(struct ubi_device *ubi,
  */
 static int init_layout_volume(struct ubi_device *ubi)
 {
-	int pnum, err, pebs_found;
+	int pnum, err, lnum;
 	struct ubi_volume *lvol;
 	struct ubi_pmap *pmap;
 
@@ -912,7 +912,7 @@ static int init_layout_volume(struct ubi_device *ubi)
 	 * Note: We do not read or check the llp headers here as that is 
 	 * handled by the volume processing function.
 	 */
-	pebs_found = 0;
+	lnum = 0;
 	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
 		pmap = &ubi->peb_map[pnum];
 
@@ -921,21 +921,23 @@ static int init_layout_volume(struct ubi_device *ubi)
 		if (err < 0)
 			return err;
 		else if (err) {
-			pmap->bad = 1;
+			err = ubi_pmap_markbad(ubi, ubi->peb_map, pnum);
 		}
 		else {
-
-			pmap->vol_id = lvol->vol_id;
-			pmap->lnum = pebs_found;
-			pmap->inuse = 1;
-			pmap->bad = 0;
-			pebs_found++;
+			lnum++;
+			if (lnum == lvol->reserved_pebs) {
+				break;
+			}
 		}
-
-		pmap++;
 	}
 
-	return 0;
+	/* Now that we have marked the first blocks as bad, we can grow the
+	 * layout volume and it will occupy the correct blocks.
+	 */
+	err = ubi_pmap_resize_volume(
+		ubi, ubi->peb_map, lvol->vol_id, lvol->reserved_pebs);
+
+	return err;
 }
 
 /**

@@ -37,16 +37,33 @@
 /**
  * ubi_pmap_init - Initialise a PEB map
  * @ubi: UBI device description object
- * @peb_map: PEB Map data structure to be allocated
  *
  * This function initialises the PEB map data structure.
- * Returns 0 on success or -ENOMEM if failed to allocate data structure.
+ * Returns pointer to allocated pmap structure on success or NULL if 
+ * failed to allocate data structure.
  */
 
 struct ubi_pmap *ubi_pmap_init(struct ubi_device *ubi)
 {
 	struct ubi_pmap *pmap = 
 		vmalloc(ubi->peb_count * (sizeof struct ubi_pmap));
+	if (pmap) {
+		memset(pmap, 0, ubi->peb_count * (sizeof struct ubi_pmap));
+	}
+	return pmap;
+}
+
+/**
+ * ubi_pmap_free - Initialise a PEB map
+ * @ubi: UBI device description object
+ * @peb_map: PEB Map data structure to be freed
+ *
+ * This function frees the PEB map data structure.
+ */
+
+void ubi_pmap_free(struct ubi_device *ubi, struct ubi_pmap *pmap)
+{
+	vfree(pmap);
 }
 
 /**
@@ -62,13 +79,14 @@ struct ubi_pmap *ubi_pmap_init(struct ubi_device *ubi)
  */
 
 int ubi_pmap_lookup_pnum(struct ubi_device *ubi, struct ubi_pmap *peb_map,
-			 struct ubi_volume *vol, int lnum)
+			 int vol_id, int lnum)
 {
 	int pnum;
+	struct ubi_pmap *pmap;
 
 	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
-		pmap = &ubi->peb_map[pnum];
-		if (pmap->vol_id == vol->vol_id &&
+		pmap = &peb_map[pnum];
+		if (pmap->vol_id == vol_id &&
 		    pmap->lnum == lnum && 
 		    pmap->inuse &&
 		    !pmap->bad) {
@@ -78,5 +96,150 @@ int ubi_pmap_lookup_pnum(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 	}
 
 	return -1;
+}
+
+#if 0 	// TODO - remove
+/**
+ * ubi_pmap_add - Add a vol/lnum to pnum mapping to the PEB map
+ * @ubi: UBI device description object
+ * @peb_map: PEB Map data structure
+ * @vol_id: volume identifier
+ * @lnum: logical eraseblock number
+ * @pnum: physical eraseblock number
+ *
+ * This function adds a mapping between vol/leb to head of list peb.
+ * Returns zero on success, UBI_PMAP_INUSE if the peb is already inuse
+ * and UBI_PMAP_BAD if the peb is marked bad.
+ */
+
+int ubi_pmap_add(struct ubi_device *ubi, struct ubi_pmap *peb_map,
+		 int vol_id, int lnum, int pnum)
+{
+	struct ubi_pmap *pmap = &peb_map[pnum];
+
+	if (pmap->inuse) {
+		return UBI_PMAP_INUSE;
+	}
+
+	if (pmap->bad) {
+		return UBI_PMAP_BAD;
+	}
+
+	pmap->inuse = 1;
+	pmap->vol_id = vol_id;
+	pmap->lnum = lnum;
+
+	return 0;
+}
+
+/**
+ * ubi_pmap_remove - Remove a vol/lnum to pnum mapping
+ * @ubi: UBI device description object
+ * @peb_map: PEB Map data structure
+ * @vol_id: volume identifier
+ * @lnum: logical eraseblock number
+ * @pnum: physical eraseblock number
+ *
+ * This function removes a mapping between vol/leb to head of list peb.
+ * Returns zero on success, UBI_PMAP_NOT_INUSE if the peb is not inuse
+ * and UBI_PMAP_BAD if the peb is marked bad.
+ */
+
+int ubi_pmap_remove(struct ubi_device *ubi, struct ubi_pmap *peb_map,
+		 int vol_id, int lnum, int pnum)
+{
+	struct ubi_pmap *pmap = &peb_map[pnum];
+
+	if (!pmap->inuse) {
+		return UBI_PMAP_NOT_INUSE;
+	}
+
+	if (pmap->bad) {
+		return UBI_PMAP_BAD;
+	}
+
+	pmap->inuse = 0;
+
+	return 0;
+}
+#endif
+
+/**
+ * ubi_pmap_resize_volume - Increase or decrease the size of a volume
+ * @ubi: UBI device description object
+ * @peb_map: PEB Map data structure
+ * @vol_id: volume identifier
+ * @reserved_pebs: The new size of the volume
+ *
+ * This function adds or removed PEBs associated with a volume.
+ * blocks are always added or removed from the end of the logical volume.
+ * Returns zero on success
+ */
+/* TODO - No, wrong. We need to cope with bad blocks appearing in volumes
+ * 	  which would cause the lebs to be out of order wrt pebs.
+ */
+int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
+		 	   int vol_id, int reserved_pebs)
+{
+	int pnum, lnum = 0;
+	struct ubi_pmap *pmap;
+
+	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+		pmap = &peb_map[pnum];
+		if (pmap->vol_id == vol_id &&
+		    pmap->inuse &&
+		    !pmap->bad) {
+			
+			/* Count the number of pebs the volume already has */
+			lnum++;
+
+			/* If we have exceeded the new size, start removing */
+			if (lnum > reserved_pebs) {
+				pmap->inuse = 0;
+			}
+		}
+	}
+
+	/* if the size has increased, add more */
+	if (lnum < reserved_pebs) {
+		for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+			pmap = &peb_map[pnum];
+			if (!pmap->inuse && !pmap->bad) {
+
+				/* Count the number of  new pebs */
+				lnum++;
+
+				pmap->inuse = 1;
+				pmap->vol_id = vol_id;
+				pmap->lnum = lnum;
+
+				if (lnum == reserved_pebs) {
+					break;
+				}
+			}
+		}
+	}
+	
+	return 0;
+}
+
+/**
+ * ubi_pmap_add - Add a vol/lnum to pnum mapping to the PEB map
+ * @ubi: UBI device description object
+ * @peb_map: PEB Map data structure
+ * @pnum: physical eraseblock number
+ *
+ * This function marks a peb as bad.
+ * Returns zero
+ */
+
+int ubi_pmap_markbad(struct ubi_device *ubi, struct ubi_pmap *peb_map,
+		     int pnum)
+{
+	struct ubi_pmap *pmap = &peb_map[pnum];
+
+	pmap->bad = 1;
+
+	return 0;
 }
 

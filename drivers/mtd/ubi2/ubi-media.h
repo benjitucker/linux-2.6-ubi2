@@ -407,6 +407,7 @@ struct ubi_vtbl_record {
  * lebs are arranged in order of increasing peb.
  * @peb the first peb in the range
  * @leb the leb number at the start of the range
+ * @num the number of blocks in this mapping range
  * @vol_id of the volume that owns the range.
  * @flags UBI_PEB_INUSE if the peb is not used in any volume
  * 	  UBI_PEB_BAD if it is a bad PEB and should not be used
@@ -418,6 +419,7 @@ struct ubi_vtbl_record {
 struct ubi_pmap_record {
 	__be32  peb;
 	__be32  leb;
+	__be32  num;
 	__be32  vol_id;
 	__u8    flags;
 	__be32  crc;

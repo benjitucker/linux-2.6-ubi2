@@ -120,6 +120,11 @@ enum {
 #define UBI_EC_HDR_SIZE_CRC  (UBI_EC_HDR_SIZE  - sizeof(__be32))
 #define UBI_VID_HDR_SIZE_CRC (UBI_VID_HDR_SIZE - sizeof(__be32))
 
+/* TODO - everything */
+struct ubi_llp_hdr {
+	__be32  magic;
+} __attribute__ ((packed));
+
 /**
  * struct ubi_ec_hdr - UBI erase counter header.
  * @magic: erase counter header magic number (%UBI_EC_HDR_MAGIC)

@@ -1029,7 +1029,7 @@ int ubi_attach_mtd_dev(struct mtd_info *mtd, int ubi_num, int vid_hdr_offset)
 #endif
 
 	ubi_devices[ubi_num] = ubi;
-#if 0	/* I will probably need to do this too */
+#if 0	/* TODO I will probably need to do this too */
 	ubi_notify_all(ubi, UBI_VOLUME_ADDED, NULL);
 #endif
 	return ubi_num;

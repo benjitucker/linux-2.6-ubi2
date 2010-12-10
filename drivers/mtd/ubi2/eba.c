@@ -336,7 +336,8 @@ int ubi_eba_erase_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 		return err;
 
 	/* In this initial simple version the leb number = the peb number */
-	pnum = lnum + vol->dleb_offset;
+//	pnum = lnum + vol->dleb_offset;
+	pnum = ubi_pmap_lookup_pnum(ubi, vol, lnum);
 
 	//TODO - 
 	/* check our data and check for empty LEB. If it is empty then we do
@@ -393,7 +394,8 @@ int ubi_eba_unmap_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 
 //	pnum = vol->eba_tbl[lnum];
 	/* In this initial simple version the leb number = the peb number */
-	pnum = lnum + vol->dleb_offset;
+//	pnum = lnum + vol->dleb_offset;
+	pnum = ubi_pmap_lookup_pnum(ubi, vol, lnum);
 
 #if 0	// TODO - remove
 	pnum = vol->eba_tbl[lnum];
@@ -455,7 +457,8 @@ int ubi_eba_read_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 
 //	pnum = vol->eba_tbl[lnum];
 	/* In this initial simple version the leb number = the peb number */
-	pnum = lnum + vol->dleb_offset;
+//	pnum = lnum + vol->dleb_offset;
+	pnum = ubi_pmap_lookup_pnum(ubi, vol, lnum);
 
 	if (pnum < 0) {
 		/*
@@ -687,7 +690,8 @@ int ubi_eba_write_leb(struct ubi_device *ubi, struct ubi_volume *vol, int lnum,
 
 //	pnum = vol->eba_tbl[lnum];
 	/* In this initial simple version the leb number = the peb number */
-	pnum = lnum + vol->dleb_offset;
+//	pnum = lnum + vol->dleb_offset;
+	pnum = ubi_pmap_lookup_pnum(ubi, vol, lnum);
 
 	if (pnum >= 0) {
 		dbg_eba("write %d bytes at offset %d of LEB %d:%d, PEB %d",
@@ -1056,7 +1060,8 @@ int ubi_eba_move_leb(struct ubi_device *ubi, struct ubi_volume *vol,
 
 //	pnum = vol->eba_tbl[lnum];
 	/* In this initial simple version the leb number = the peb number */
-	pnum = lnum + vol->dleb_offset;
+//	pnum = lnum + vol->dleb_offset;
+	pnum = ubi_pmap_lookup_pnum(ubi, vol, lnum);
 
 	if (pnum >= 0) {
 		dbg_eba("write %d bytes at offset %d of LEB %d:%d, PEB %d",

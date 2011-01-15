@@ -166,6 +166,31 @@ int ubi_pmap_remove(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 #endif
 
 /**
+ * ubi_pmap_vol_reserved_area - Volume to PEB Range mapping
+ * @vol_id: volume identifier
+ * @first_peb: pointer to return the first PEB for the volume
+ * @last_peb: pointer to return the last PEB for the volume
+ *
+ * Some volumes are grouped into particular blocks of PEBS.
+ * Cueerntly this is only used for the layout volume which needs to occupy
+ * to very first PEBs of the device
+ */
+static void ubi_pmap_vol_reserved_area(int vol_id, int *first_peb, int *last_peb)
+{
+	/* The layout volume is treated specially, as it has to reside in the
+	 * first UBI_LAYOUT_VOLUME_RESERVED_EBS blocks of the device.
+	 */
+	if (vol_id == UBI_LAYOUT_VOLUME_ID) {
+		*first_peb = 0;
+		*last_peb = UBI_LAYOUT_VOLUME_RESERVED_EBS - 1;
+	}
+	else {
+		*first_peb = UBI_LAYOUT_VOLUME_RESERVED_EBS;
+		*last_peb = ubi->peb_count - 1;
+	}
+}
+
+/**
  * ubi_pmap_resize_volume - Increase or decrease the size of a volume
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure
@@ -186,6 +211,8 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 {
 	int pnum, lnum = 0;
 	struct ubi_pmap *pmap;
+	int first_peb, last_peb;
+
 
 	/* If the new size is zero, delete all mappings for the volume */
 	if (reserved_pebs == 0) {
@@ -195,17 +222,16 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 				memset(pmap, 0, sizeof(struct ubi_pmap));
 			}
 		}
-		
+
 		return 0;
 	}
-
 
 	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
 		pmap = &peb_map[pnum];
 		if (pmap->vol_id == vol_id &&
 		    pmap->inuse &&
 		    !pmap->bad) {
-			
+
 			/* Count the number of pebs the volume already has */
 			lnum++;
 		}

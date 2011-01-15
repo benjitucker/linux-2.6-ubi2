@@ -175,6 +175,7 @@ int ubi_vtbl_rename_volumes(struct ubi_device *ubi,
  *
  * This function returns zero if @vtbl and @pmap are all right, %1 if CRC is
  * incorrect, and %-EINVAL if either contains inconsistent data.
+ * TODO cross reference the volume and pmap tables for vol_id and reserved pebs
  */
 static int vtbl_check(const struct ubi_device *ubi,
 		      const struct ubi_vtbl_record *vtbl,
@@ -304,6 +305,7 @@ static int vtbl_check(const struct ubi_device *ubi,
 			return 1;
 		}
 
+#if 0
 		/* records should be in order of PEB */
 		if (i > 0) {
 			if (pmap[i].peb <= pmap[i-1].peb) {
@@ -311,6 +313,7 @@ static int vtbl_check(const struct ubi_device *ubi,
 				goto bad_pmap;
 			}
 		}
+#endif
 
 		if (peb < 0 || leb < 0) {
 			err = 14;
@@ -345,9 +348,8 @@ bad_pmap:
 }
 
 /**
- * create_vtbl - create a copy of volume table.
+ * create_vtbl - create a copy of volume table and peb map table.
  * @ubi: UBI device description object
- * @si: scanning information
  * @copy: number of the volume table copy
  * @vtbl: contents of the volume table
  * @ptbl: contents of the pmap table
@@ -665,7 +667,7 @@ static void normalise_ptbl(struct ubi_device *ubi,
  
 
 /**
- * create_empty_lvol - create empty layout volume.
+ * create_empty_lvol - create empty layout volume and peb map table.
  * @ubi: UBI device description object
  *
  * This function returns zero in case of success and a
@@ -759,6 +761,21 @@ static int init_volumes(struct ubi_device *ubi,
 	/* Process the PEB Map table */
 	for (i = 0; i < ubi->pmap_slots; i++) {
 		
+		if (be32_to_cpu(ptbl[i].num) == 0)
+			continue; /* Empty record */
+		
+		/* Skip the layout volume as we have found where it is 
+		 * located already
+		 */
+		if (be32_to_cpu(ptbl[i].vol_id) == UBI_LAYOUT_VOLUME_ID)
+			continue;
+
+	__be32  peb;
+	__be32  leb;
+	__be32  num;
+	__be32  vol_id;
+	__u8    flags;
+	__be32  crc;
 	}
 
 	/* Process the volume table */
@@ -1189,7 +1206,7 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	 * The layout volume is OK, initialize the corresponding in-RAM data
 	 * structures.
 	 */
-	err = init_volumes(ubi, ubi->vtbl, ubi->pmap);
+	err = init_volumes(ubi, ubi->vtbl, ubi->ptbl);
 	if (err)
 		goto out_free;
 

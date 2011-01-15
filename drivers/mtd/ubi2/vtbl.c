@@ -350,14 +350,14 @@ bad_pmap:
  * @si: scanning information
  * @copy: number of the volume table copy
  * @vtbl: contents of the volume table
- * @pmap_tbl: contents of the pmap table
+ * @ptbl: contents of the pmap table
  *
  * This function returns zero in case of success and a negative error code in
  * case of failure.
  */
 //static int create_vtbl(struct ubi_device *ubi, struct ubi_scan_info *si,
 static int create_vtbl(struct ubi_device *ubi,
-		       int copy, void *vtbl, void *pmap_tbl)
+		       int copy, void *vtbl, void *ptbl)
 {
 	int leb, err, tries = 0;
 //	static struct ubi_vid_hdr *vid_hdr;
@@ -437,7 +437,7 @@ retry:
 		goto write_error;
 
 	err = ubi_eba_write_leb(
-		ubi, layout_vol, leb+1, pmap_tbl, 0, ubi->pmap_size, UBI_LONGTERM);
+		ubi, layout_vol, leb+1, ptbl, 0, ubi->pmap_size, UBI_LONGTERM);
 	if (err)
 		goto write_error;
 
@@ -650,27 +650,46 @@ out_free:
 }
 
 /**
+ * normalise_ptbl - shuffle pmap records to combine adjcent ones
+ * @ubi: UBI device description object
+ * @ptbl: UBI device description object
+ *
+ * This function reduces the number of pmap records by combining
+ * those that are physically adjcent (PEB number)
+ */
+static void normalise_ptbl(struct ubi_device *ubi, 
+			struct ubi_pmap_record *ptbl)
+{
+	
+}
+ 
+
+/**
  * create_empty_lvol - create empty layout volume.
  * @ubi: UBI device description object
  *
  * This function returns zero in case of success and a
  * negative error code in case of failure.
+ * Scanning for good blocks should have been completed prior to calling
+ * this function.
  */
 static int create_empty_lvol(struct ubi_device *ubi)
 {
-	int i;
-	struct ubi_vtbl_record *vtbl;
-	struct ubi_pmap_record *pmap;
+	int i, err = 0;
+	struct ubi_vtbl_record *vtbl = NULL;
+	struct ubi_pmap_record *ptbl = NULL;
 
 	vtbl = vmalloc(ubi->vtbl_size);
-	if (!vtbl)
-		return -ENOMEM;
+	if (!vtbl) {
+		err = -ENOMEM;
+		goto out_free;
+	}
 	memset(vtbl, 0, ubi->vtbl_size);
 
-	pmap = vmalloc(ubi->pmap_size);
-	if (!pmap) {
-		vfree(vtbl);
-		return -ENOMEM;
+	ptbl = vmalloc(ubi->pmap_size);
+	if (!ptbl) {
+		err = -ENOMEM;
+		goto out_free;
 	}
 	memset(pmap, 0, ubi->pmap_size);
 
@@ -680,30 +699,43 @@ static int create_empty_lvol(struct ubi_device *ubi)
 	for (i = 0; i < ubi->pmap_slots; i++)
 		memcpy(&ptbl[i], &empty_pmap_record, UBI_PMAP_RECORD_SIZE);
 
-	/* reserve the first N PEBs for the layout volume */
-	ptbl[0].peb = 0;
-	ptbl[0].leb = 0;
-	ptbl[0].vol_id = UBI_LAYOUT_VOLUME_ID;
-	ptbl[0].flags = UBI_PMAP_INUSE;
-	ptbl[0].crc = crc32(UBI_CRC32_INIT, &ptbl[0], UBI_PMAP_RECORD_SIZE_CRC);
+	/* reserve the first UBI_LAYOUT_VOLUME_SIZE PEBs for the layout volume */
+	for (i = 0; i < UBI_LAYOUT_VOLUME_SIZE; i++) {
 
-	ptbl[1].peb = ptbl[0].peb + UBI_LAYOUT_VOLUME_SIZE;
-	ptbl[1].crc = crc32(UBI_CRC32_INIT, &ptbl[1], UBI_PMAP_RECORD_SIZE_CRC);
+		ptbl[i].peb = 
+			ubi_pmap_lookup_pnum(ubi, ubi->peb_map, UBI_LAYOUT_VOLUME_ID, i);
+		
+		if (!ptbl) {
+			ubi_err("no good pebs available for layout volume");
+			err = -ENOMEM;
+			goto out_free;
+		}
+
+		ptbl[i].leb = i;
+		ptbl[i].vol_id = UBI_LAYOUT_VOLUME_ID;
+		ptbl[i].flags = UBI_PMAP_INUSE;
+		ptbl[i].crc = crc32(UBI_CRC32_INIT, &ptbl[i], UBI_PMAP_RECORD_SIZE_CRC);
+	}
+
+	/* normalise adjacent ptbl entries */
+	normalise_ptbl(ubi, ptbl);
 
 	for (i = 0; i < UBI_LAYOUT_VOLUME_COPIES; i++) {
-		int err;
 
 		err = create_vtbl(ubi, i, vtbl, ptbl);
 		if (err) {
-			vfree(vtbl);
-			vfree(pmap);
-			return err;
+			goto out_free;
 		}
 	}
 
 	ubi->vtbl = vtbl;
 	ubi->ptbl = ptbl;
 	return 0;
+
+out_free:
+	if (vtbl != NULL) vfree(vtbl);
+	if (ptbl != NULL) vfree(ptbl);
+	return err;
 }
 
 /**
@@ -876,7 +908,6 @@ static int init_layout_volume(struct ubi_device *ubi)
 {
 	int pnum, err, lnum;
 	struct ubi_volume *lvol;
-	struct ubi_pmap *pmap;
 
 	/* And add the layout volume */
 	lvol = kzalloc(sizeof(struct ubi_volume), GFP_KERNEL);
@@ -902,6 +933,15 @@ static int init_layout_volume(struct ubi_device *ubi)
 	ubi->vol_count += 1;
 	lvol->ubi = ubi;
 
+	/* Now that we have marked the first blocks as bad, we can grow the
+	 * layout volume and it will occupy the correct blocks.
+	 * Create the peb map for the layout volume. The first N PEBs of the
+	 * device are chosen which is where the layout volume resides.
+	 * If any of these PEBs are bad, we will find good ones next.
+	 */
+	err = ubi_pmap_resize_volume(
+		ubi, ubi->peb_map, lvol->vol_id, lvol->reserved_pebs);
+
 	/* Setup the PEB map for the layout volume. Hardcode the first N
 	 * good PEBS for the layout volume.
 	 * We need to scan over bad PEBs to find the layout volume
@@ -914,14 +954,14 @@ static int init_layout_volume(struct ubi_device *ubi)
 	 */
 	lnum = 0;
 	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
-		pmap = &ubi->peb_map[pnum];
 
 		/* Skip bad physical eraseblocks */
 		err = ubi_io_is_bad(ubi, pnum);
 		if (err < 0)
 			return err;
 		else if (err) {
-			err = ubi_pmap_markbad(ubi, ubi->peb_map, pnum);
+			err = ubi_pmap_markbad_replace(ubi, ubi->peb_map, pnum);
+			/* TODO - deal with error code */
 		}
 		else {
 			lnum++;
@@ -930,12 +970,6 @@ static int init_layout_volume(struct ubi_device *ubi)
 			}
 		}
 	}
-
-	/* Now that we have marked the first blocks as bad, we can grow the
-	 * layout volume and it will occupy the correct blocks.
-	 */
-	err = ubi_pmap_resize_volume(
-		ubi, ubi->peb_map, lvol->vol_id, lvol->reserved_pebs);
 
 	return err;
 }

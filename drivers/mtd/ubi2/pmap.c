@@ -26,6 +26,7 @@
  *
  * TODO - explanation text
  * TODO - move to an RB tree for faster lookups
+ * TODO - Mutex protection of the PMAP?
  *
  */
 
@@ -98,7 +99,7 @@ int ubi_pmap_lookup_pnum(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 	return -1;
 }
 
-#if 0 	// TODO - remove
+#if 0 	// TODO - remove, now handled by resize
 /**
  * ubi_pmap_add - Add a vol/lnum to pnum mapping to the PEB map
  * @ubi: UBI device description object
@@ -173,16 +174,31 @@ int ubi_pmap_remove(struct ubi_device *ubi, struct ubi_pmap *peb_map,
  *
  * This function adds or removed PEBs associated with a volume.
  * blocks are always added or removed from the end of the logical volume.
+ * PEBs chosen are those that are available with the lowest index first.
  * Returns zero on success
  */
 /* TODO - No, wrong. We need to cope with bad blocks appearing in volumes
  * 	  which would cause the lebs to be out of order wrt pebs.
+ *  Surely we need to remove LEBS that are unmapped!
  */
 int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		 	   int vol_id, int reserved_pebs)
 {
 	int pnum, lnum = 0;
 	struct ubi_pmap *pmap;
+
+	/* If the new size is zero, delete all mappings for the volume */
+	if (reserved_pebs == 0) {
+		for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+			pmap = &peb_map[pnum];
+			if (pmap->vol_id == vol_id) {
+				memset(pmap, 0, sizeof(struct ubi_pmap));
+			}
+		}
+		
+		return 0;
+	}
+
 
 	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
 		pmap = &peb_map[pnum];
@@ -192,11 +208,6 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 			
 			/* Count the number of pebs the volume already has */
 			lnum++;
-
-			/* If we have exceeded the new size, start removing */
-			if (lnum > reserved_pebs) {
-				pmap->inuse = 0;
-			}
 		}
 	}
 
@@ -206,12 +217,13 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 			pmap = &peb_map[pnum];
 			if (!pmap->inuse && !pmap->bad) {
 
-				/* Count the number of  new pebs */
-				lnum++;
-
 				pmap->inuse = 1;
 				pmap->vol_id = vol_id;
 				pmap->lnum = lnum;
+			//	pmap->mapped = 0;	TODO - handling mapped LEBs
+
+				/* Count the number of new pebs */
+				lnum++;
 
 				if (lnum == reserved_pebs) {
 					break;
@@ -219,27 +231,85 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 			}
 		}
 	}
+
+	/* if the size has decreased, remove unmapped blocks */
+	/* TODO - volume reduction is tricky. We have to remove LEBs off of the end
+	 * (highest index) first but what if they are currently mapped??
+	 * Look at the old UBI, how do they handle this??
+	 */
+#if 0
+	if (lnum > reserved_pebs) {
+		for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+			pmap = &peb_map[pnum];
+			if (pmap->vol_id == vol_id &&
+				pmap->inuse &&
+				!pmap->bad &&
+				!pmap->mapped) {
+
+				/* Count the number of removed pebs */
+				lnum--;
+
+				pmap->inuse = 0;
+
+				if (lnum == reserved_pebs) {
+					break;
+				}
+			}
+		}
+	}
+#endif
 	
 	return 0;
 }
 
 /**
- * ubi_pmap_add - Add a vol/lnum to pnum mapping to the PEB map
+ * ubi_pmap_markbad_replace - Mark a PEB as bad and replace it with another.
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure
  * @pnum: physical eraseblock number
  *
- * This function marks a peb as bad.
- * Returns zero
+ * This function marks a peb as bad. If the PEB is in use it is replaced by another unused 
+ * one.
+ * Returns the replacement peb number, pnum if not replaced or negitive error code.
  */
 
-int ubi_pmap_markbad(struct ubi_device *ubi, struct ubi_pmap *peb_map,
+int ubi_pmap_markbad_replace(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		     int pnum)
 {
 	struct ubi_pmap *pmap = &peb_map[pnum];
+	struct ubi_pmap *replacment_pmap;
+	int replacment_pnum, lnum = 0;
+	int vol_id;
+	int need_replacment = 0;
+
+	if (pmap->inuse && !pmap->bad)
+	{
+		need_replacment = 1;
+	}
 
 	pmap->bad = 1;
+	
+	if (need_replacment) 
+	{
+		/* Search for a replacment */
+		for (replacment_pnum = 0; replacment_pnum < ubi->peb_count; ++replacment_pnum) {
+			replacment_pmap = &peb_map[replacment_pnum];
+			if (!replacment_pmap->inuse && !replacment_pmap->bad) {
 
-	return 0;
+				replacment_pmap->inuse = 1;
+				replacment_pmap->vol_id = pmap->vol_id;
+				replacment_pmap->lnum = pmap->lnum;
+			//	pmap->mapped = 0;	TODO - handling mapped LEBs
+				return replacment_pnum;
+			}
+		}
+	}
+	else
+	{	
+		/* TODO - Maybe it would be more sensible to return an error here */
+		return pnum;
+	}
+
+	return -ENOMEM;
 }
 

@@ -436,6 +436,8 @@ Torturing
 =========
 
 TODO - As UBI1 (torture_peb())
+Do not do it? This is a problem with MLC nand.
+
 
 Partitioning device into volumes
 ================================
@@ -583,6 +585,13 @@ Maybe, instead of the above description for handling worn out blocks, we should
 have a simple bad block skip mechanism. The bad block table can be held with the
 volume information and for ease of use, PEB numbers that are known to be bad 
 will not be chosen. 
+	- Bad block skip cannot handle the situation where a block go's bad
+	  (see below). We need a full blown mapping between LEB number and PEB
+	  number (of the head of the chain). This is called PEB Map (pmap)
+	- pmap needs to be maintained in the flash, and also a Ram copy.
+	- Remember, this pmap is only updated when:
+		- A volume is created, deleted or resized
+		- A PEB go's bad.
 The start of LEB chains will no longer be the PEB index, but adjusted PEB index
 based on the bad block skipping.
 
@@ -592,6 +601,21 @@ PEB 125 BAD!!
 PEB 126 -> chain -> LEB 125 payload
 PEB 127 -> chain -> LEB 126 payload
 
+PROBLEM: What happens when a PEB go's bad and is currently holding the start 
+of a chain. How do we update the PEB map.
+ - We have to find a new PEB that will replace the bad one. But if we make it 
+   the new start of chain, we are no longer using the simple bad block skipping
+   PEB map.
+	- Maybe abandon the bad block skip ad have full PEB map where any PEB
+	  can be mapped to the start of the chain to the LEB.
+e.g. PEB 124 gos bad so replace it with the next available (unused):
+
+PEB 123 -> chain -> LEB 122 payload
+PEB 124 Gone BAD!!
+PEB 125 BAD!!
+PEB 126 -> chain -> LEB 125 payload
+PEB 127 -> chain -> LEB 126 payload
+PEB 128 -> chain -> LEB 124 payload	(replacement for PEB 124)
 
 
 Include ECC error correction

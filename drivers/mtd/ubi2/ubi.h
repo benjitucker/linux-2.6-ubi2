@@ -305,6 +305,7 @@ struct ubi_pmap {
 	int lnum;
 	unsigned int inuse:1;
 	unsigned int bad:1;
+//	unsigned int mapped:1;	TODO - handling mapped LEBS
 };
 
 struct ubi_wl_entry;

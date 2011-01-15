@@ -403,7 +403,7 @@ struct ubi_vtbl_record {
  * Also stored in the layout volume, UBI_MAX_PMAP items are stored.
  * These hold the information that maps volume-leb to peb that start the 
  * chain to the leb payload. There are a limited number of these stored
- * so each one defines the start of a randge of leb to peb's where the
+ * so each one defines the start of a range of leb to peb's where the
  * lebs are arranged in order of increasing peb.
  * @peb the first peb in the range
  * @leb the leb number at the start of the range

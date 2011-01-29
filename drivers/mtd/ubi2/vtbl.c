@@ -176,6 +176,8 @@ int ubi_vtbl_rename_volumes(struct ubi_device *ubi,
  * This function returns zero if @vtbl and @pmap are all right, %1 if CRC is
  * incorrect, and %-EINVAL if either contains inconsistent data.
  * TODO cross reference the volume and pmap tables for vol_id and reserved pebs
+ * Also check for overlapping pmap records
+ * and check the pmap->num
  */
 static int vtbl_check(const struct ubi_device *ubi,
 		      const struct ubi_vtbl_record *vtbl,
@@ -295,7 +297,7 @@ static int vtbl_check(const struct ubi_device *ubi,
 		peb = be32_to_cpu(pmap[i].peb);
 		leb = be32_to_cpu(pmap[i].leb);
 		vol_id = be32_to_cpu(pmap[i].vol_id);
-		flags = vtbl[i].flags;
+		flags = pmap[i].flags;
 
 		crc = crc32(UBI_CRC32_INIT, &pmap[i], UBI_PMAP_RECORD_SIZE_CRC);
 		if (be32_to_cpu(pmap[i].crc) != crc) {
@@ -651,10 +653,62 @@ out_free:
 	return err;
 }
 
+
+/**
+ * concat_pmap_record - combine pmap records if adjcent
+ * @ubi: UBI device description object
+ * @ptbl: UBI device description object
+ *
+ * This function combines two pmap records into one if they are 
+ * physically and logically colocated.
+ */
+static void concat_pmap_record(struct ubi_device *ubi,
+			struct ubi_pmap_record *pr1,
+			struct ubi_pmap_record *pr2)
+{
+	uint32_t crc;
+	int peb1 = be32_to_cpu(pr1->peb);
+	int leb1 = be32_to_cpu(pr1->leb);
+	int num1 = be32_to_cpu(pr1->num);
+	int vol_id1 = be32_to_cpu(pr1->vol_id);
+	int flags1 = pr1->flags;
+	int peb2 = be32_to_cpu(pr2->peb);
+	int leb2 = be32_to_cpu(pr2->leb);
+	int num2 = be32_to_cpu(pr2->num);
+	int vol_id2 = be32_to_cpu(pr2->vol_id);
+	int flags2 = pr2->flags;
+
+	if ((vol_id1 == vol_id2) && (flags1 == flags2)) {
+
+		bool peb_before = (peb1 == peb2 + num2);
+		bool peb_after = (peb2 == peb1 + num1);
+		bool leb_before = (leb1 == leb2 + num2);
+		bool leb_after = (leb2 == leb1 + num1);
+
+		if ((peb_after && leb_after) || (peb_before && leb_before)) {
+
+			/* Colocated records. Combine */
+			if (peb_before) {	/* implies leb_before */
+				pr1->peb = pr2->peb;
+				pr1->leb = pr2->leb;
+			}
+			pr1->num = cpu_to_be32(num1 + num2);
+			crc = crc32(UBI_CRC32_INIT, pr1, UBI_PMAP_RECORD_SIZE_CRC);
+			pr1->crc = cpu_to_be32(crc);
+			
+			flags2 &= ~UBI_PEB_INUSE;
+			pr2->flags = cpu_to_be32(flags2);
+			crc = crc32(UBI_CRC32_INIT, pr2, UBI_PMAP_RECORD_SIZE_CRC);
+			pr2->crc = cpu_to_be32(crc);
+		}
+	}
+}
+
+
 /**
  * normalise_ptbl - shuffle pmap records to combine adjcent ones
  * @ubi: UBI device description object
- * @ptbl: UBI device description object
+ * @ptbl: table of pmap records
  *
  * This function reduces the number of pmap records by combining
  * those that are physically adjcent (PEB number)
@@ -662,7 +716,26 @@ out_free:
 static void normalise_ptbl(struct ubi_device *ubi, 
 			struct ubi_pmap_record *ptbl)
 {
-	
+	int i, j;
+	struct ubi_pmap_record *p1, *p2;
+
+	for (i = 0; i < ubi->pmap_slots - 1; i++) {
+
+		p1 = ptbl + i;
+		if ((p1->flags & UBI_PEB_INUSE) && 
+			!(p1->flags & UBI_PEB_BAD)) {
+
+			for (j = i + 1; j < ubi->pmap_slots; j++) {
+
+				p2 = ptbl + j;
+				if ((p2->flags & UBI_PEB_INUSE) && 
+						!(p2->flags & UBI_PEB_BAD)) {
+
+					concat_pmap_record(ubi, p1, p2);
+				}
+			}
+		}
+	}
 }
  
 

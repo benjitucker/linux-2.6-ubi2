@@ -294,6 +294,8 @@ struct ubi_volume_desc {
 
 /**
  * TODO - employ an RB tree so we can quickly find the PEB for a volume/LEB
+ * TODO - a bigger problem is the ammount of ram needed to store this. A 1GB nand with
+ *        128K page size needs 128K of ram, to much.
  * struct ubi_peb_map - UBI mapping of a device PEB to volume and LEB chain.
  * @vol: reference to the corresponding volume description object
  * @leb: LEB number of the volume chained from this PEB
@@ -305,7 +307,6 @@ struct ubi_pmap {
 	int lnum;
 	unsigned int inuse:1;
 	unsigned int bad:1;
-//	unsigned int mapped:1;	TODO - handling mapped LEBS
 };
 
 struct ubi_wl_entry;
@@ -427,8 +428,8 @@ struct ubi_device {
 	int vtbl_slots;
 	int vtbl_size;
 	struct ubi_vtbl_record *vtbl;
-	int pmap_slots;
-	int pmap_size;
+	int ptbl_slots;
+	int ptbl_size;
 	struct ubi_pmap_record *ptbl;
 	struct mutex device_mutex;
 

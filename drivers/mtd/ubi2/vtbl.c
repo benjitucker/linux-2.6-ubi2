@@ -73,6 +73,102 @@ static struct ubi_vtbl_record empty_vtbl_record;
 static struct ubi_vtbl_record empty_pmap_record;
 
 /**
+ * ubi_change_ptbl - change peb_map table.
+ * @ubi: UBI device description object
+ * @idx: table index to change
+ * @vtbl_rec: new volume table record
+ *
+ * This function changes volume mapping table the reflect the current state of
+ * the 'in ram' peb_map. When changing a volume size, the caller must allocate
+ * blocks the the volume by calling pmap allocate or similar before calling
+ * this function to commit the changes to flash.
+ * Returns zero in case of success and a negative error code in case of 
+ * failure.
+ */
+int ubi_change_ptbl(struct ubi_device *ubi)
+{
+	int i, leb, err;
+	uint32_t crc;
+	struct ubi_volume *layout_vol;
+	int ptbl_idx;
+
+	/* Callback to add the next ptbl record */
+	int add_ptbl_record(struct ubi_device *ubi, 
+				void *usr_ptr, int vol_id, int peb,
+				int leb, int blocks, int bad)
+	{
+		int ptbl_idx = *(int*)usr_ptr;
+		struct ubi_pmap_record *ptbl_rec = &ubi->ptbl[ptbl_idx];
+		
+		/* Reject too many records */
+		if (ptbl_idx >= ubi->ptbl_slots) {
+			ubi_err("device two fragmented (exhausted peb map)");
+			return -ENOSPC;
+		}
+		
+		ptbl_rec->peb = cpu_to_be32(peb);
+		ptbl_rec->leb = cpu_to_be32(leb);
+		ptbl_rec->num = cpu_to_be32(blocks);
+		ptbl_rec->vol_id = cpu_to_be32(vol_id);
+		ptbl_rec->flags = (bad) ? UBI_PEB_BAD : UBI_PEB_INUSE; 
+		crc = crc32(UBI_CRC32_INIT, ptbl_rec, UBI_PTBL_RECORD_SIZE_CRC);
+		ptbl_rec->crc = cpu_to_be32(crc);
+
+		*usr_ptr = ptbl_idx + 1;
+		return 0;
+	}
+
+	layout_vol = ubi->volumes[vol_id2idx(ubi, UBI_LAYOUT_VOLUME_ID)];
+
+	/* process the peb map to populate the ptbl */
+	ptbl_idx = 0;
+	err = ubi_pmap_extract_vol_pebs(ubi, ubi->peb_map, 
+				add_ptbl_record, &ptbl_idx);
+	if (err)
+		return err;
+
+	/* Clear out remaining ptbl entries */
+	for (;ptbl_idx < ubi->ptbl_slots; ptbl_idx++) {
+		memcpy(&ubi->ptbl[ptbl_idx], empty_ptbl_record, 
+			sizeof(struct ubi_ptbl_record));
+	}
+	
+	/* Update both copies of the pmap table */
+	for (i = 0; i < UBI_LAYOUT_VOLUME_COPIES; i++) {
+
+		/* The pmap resides in the second leb of each copy of the
+		 * volume.
+		 */
+		leb = (i * UBI_LAYOUT_VOLUME_EBS_PER_COPY) + 1;
+
+		/* Write the pmap contents */
+		err = ubi_eba_unmap_leb(ubi, layout_vol, leb);
+		if (err)
+			return err;
+
+		err = ubi_eba_write_leb(ubi, layout_vol, leb, ubi->ptbl, 0, 
+				ubi->ptbl_size, UBI_LONGTERM);
+		if (err)
+			return err;
+
+
+#if 0
+		err = ubi_eba_unmap_leb(ubi, layout_vol, i);
+		if (err)
+			return err;
+
+		err = ubi_eba_write_leb(ubi, layout_vol, i, ubi->vtbl, 0,
+				ubi->vtbl_size, UBI_LONGTERM);
+		if (err)
+			return err;
+#endif
+	}
+
+	paranoid_vtbl_check(ubi);
+	return 0;
+}
+
+/**
  * ubi_change_vtbl_record - change volume table record.
  * @ubi: UBI device description object
  * @idx: table index to change
@@ -292,14 +388,14 @@ static int vtbl_check(const struct ubi_device *ubi,
 	}
 
 	/* Checks that the pmap records are sensible */
-	for (i = 0; i < ubi->pmap_slots; i++) {
+	for (i = 0; i < ubi->ptbl_slots; i++) {
 
 		peb = be32_to_cpu(pmap[i].peb);
 		leb = be32_to_cpu(pmap[i].leb);
 		vol_id = be32_to_cpu(pmap[i].vol_id);
 		flags = pmap[i].flags;
 
-		crc = crc32(UBI_CRC32_INIT, &pmap[i], UBI_PMAP_RECORD_SIZE_CRC);
+		crc = crc32(UBI_CRC32_INIT, &pmap[i], UBI_PTBL_RECORD_SIZE_CRC);
 		if (be32_to_cpu(pmap[i].crc) != crc) {
 			ubi_err("bad pmap CRC at record %u: %#08x, not %#08x",
 				 i, crc, be32_to_cpu(pmap[i].crc));
@@ -441,7 +537,7 @@ retry:
 		goto write_error;
 
 	err = ubi_eba_write_leb(
-		ubi, layout_vol, leb+1, ptbl, 0, ubi->pmap_size, UBI_LONGTERM);
+		ubi, layout_vol, leb+1, ptbl, 0, ubi->ptbl_size, UBI_LONGTERM);
 	if (err)
 		goto write_error;
 
@@ -535,12 +631,12 @@ static int process_lvol(struct ubi_device *ubi)
 		}
 		memset(leb[i], 0, ubi->vtbl_size);
 
-		leb_pmap[i] = vmalloc(ubi->pmap_size);
+		leb_pmap[i] = vmalloc(ubi->ptbl_size);
 		if (!leb_pmap[i]) {
 			err = -ENOMEM;
 			goto out_free;
 		}
-		memset(leb_pmap[i], 0, ubi->pmap_size);
+		memset(leb_pmap[i], 0, ubi->ptbl_size);
 
 		/* read the vtbl leb */
 		err = ubi_eba_read_leb(
@@ -552,7 +648,7 @@ static int process_lvol(struct ubi_device *ubi)
 
 		/* read the pmap leb that follows the vtbl */
 		err = ubi_eba_read_leb(
-			ubi, layout_vol, i+1, pmap_leb[i], 0, ubi->pmap_size, 0);
+			ubi, layout_vol, i+1, pmap_leb[i], 0, ubi->ptbl_size, 0);
 		if (err) {
 			/* If the read failed, fall back to the other copy */
 			err = 0;
@@ -599,7 +695,7 @@ static int process_lvol(struct ubi_device *ubi)
 		/* LEB 0 is OK */
 		if (leb[1] && pmap_leb[1]) {
 			if (!memcmp(leb[0], leb[1], ubi->vtbl_size) &&
-			    !memcmp(pmap_leb[0], pmap_leb[1], ubi->pmap_size)) {
+			    !memcmp(pmap_leb[0], pmap_leb[1], ubi->ptbl_size)) {
 			copy_corrupted[1] = 0;
 			}
 		}
@@ -693,12 +789,12 @@ static void concat_pmap_record(struct ubi_device *ubi,
 				pr1->leb = pr2->leb;
 			}
 			pr1->num = cpu_to_be32(num1 + num2);
-			crc = crc32(UBI_CRC32_INIT, pr1, UBI_PMAP_RECORD_SIZE_CRC);
+			crc = crc32(UBI_CRC32_INIT, pr1, UBI_PTBL_RECORD_SIZE_CRC);
 			pr1->crc = cpu_to_be32(crc);
 			
 			flags2 &= ~UBI_PEB_INUSE;
 			pr2->flags = cpu_to_be32(flags2);
-			crc = crc32(UBI_CRC32_INIT, pr2, UBI_PMAP_RECORD_SIZE_CRC);
+			crc = crc32(UBI_CRC32_INIT, pr2, UBI_PTBL_RECORD_SIZE_CRC);
 			pr2->crc = cpu_to_be32(crc);
 		}
 	}
@@ -719,13 +815,13 @@ static void normalise_ptbl(struct ubi_device *ubi,
 	int i, j;
 	struct ubi_pmap_record *p1, *p2;
 
-	for (i = 0; i < ubi->pmap_slots - 1; i++) {
+	for (i = 0; i < ubi->ptbl_slots - 1; i++) {
 
 		p1 = ptbl + i;
 		if ((p1->flags & UBI_PEB_INUSE) && 
 			!(p1->flags & UBI_PEB_BAD)) {
 
-			for (j = i + 1; j < ubi->pmap_slots; j++) {
+			for (j = i + 1; j < ubi->ptbl_slots; j++) {
 
 				p2 = ptbl + j;
 				if ((p2->flags & UBI_PEB_INUSE) && 
@@ -761,18 +857,18 @@ static int create_empty_lvol(struct ubi_device *ubi)
 	}
 	memset(vtbl, 0, ubi->vtbl_size);
 
-	ptbl = vmalloc(ubi->pmap_size);
+	ptbl = vmalloc(ubi->ptbl_size);
 	if (!ptbl) {
 		err = -ENOMEM;
 		goto out_free;
 	}
-	memset(pmap, 0, ubi->pmap_size);
+	memset(pmap, 0, ubi->ptbl_size);
 
 	for (i = 0; i < ubi->vtbl_slots; i++)
 		memcpy(&vtbl[i], &empty_vtbl_record, UBI_VTBL_RECORD_SIZE);
 
-	for (i = 0; i < ubi->pmap_slots; i++)
-		memcpy(&ptbl[i], &empty_pmap_record, UBI_PMAP_RECORD_SIZE);
+	for (i = 0; i < ubi->ptbl_slots; i++)
+		memcpy(&ptbl[i], &empty_pmap_record, UBI_PTBL_RECORD_SIZE);
 
 	/* reserve the first UBI_LAYOUT_VOLUME_SIZE PEBs for the layout volume */
 	for (i = 0; i < UBI_LAYOUT_VOLUME_SIZE; i++) {
@@ -789,7 +885,7 @@ static int create_empty_lvol(struct ubi_device *ubi)
 		ptbl[i].leb = i;
 		ptbl[i].vol_id = UBI_LAYOUT_VOLUME_ID;
 		ptbl[i].flags = UBI_PMAP_INUSE;
-		ptbl[i].crc = crc32(UBI_CRC32_INIT, &ptbl[i], UBI_PMAP_RECORD_SIZE_CRC);
+		ptbl[i].crc = crc32(UBI_CRC32_INIT, &ptbl[i], UBI_PTBL_RECORD_SIZE_CRC);
 	}
 
 	/* normalise adjacent ptbl entries */
@@ -838,7 +934,7 @@ static int init_volumes(struct ubi_device *ubi,
 	ubi->good_peb_count = 0;
 	ubi->corr_peb_count = 0;
 	ubi->bad_peb_count = 0;
-	for (i = 0; i < ubi->pmap_slots; i++) {
+	for (i = 0; i < ubi->ptbl_slots; i++) {
 
 		num_blocks = be32_to_cpu(ptbl[i].num);
 
@@ -1253,12 +1349,12 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 	 * The number of supported PEB Maps is limited by the eraseblock size
 	 * and by the UBI_MAX_PMAP constant.
 	 */
-	ubi->pmap_slots = ubi->leb_size / UBI_PMAP_RECORD_SIZE;
-	if (ubi->pmap_slots > UBI_MAX_PMAP)
-		ubi->pmap_slots = UBI_MAX_PMAP;
+	ubi->ptbl_slots = ubi->leb_size / UBI_PTBL_RECORD_SIZE;
+	if (ubi->ptbl_slots > UBI_MAX_PMAP)
+		ubi->ptbl_slots = UBI_MAX_PMAP;
 
-	ubi->pmap_size = ubi->pmap_slots * UBI_PMAP_RECORD_SIZE;
-	ubi->pmap_size = ALIGN(ubi->pmap_size, ubi->min_io_size);
+	ubi->ptbl_size = ubi->ptbl_slots * UBI_PTBL_RECORD_SIZE;
+	ubi->ptbl_size = ALIGN(ubi->ptbl_size, ubi->min_io_size);
 
 #if 0
 	// TODO - remove scanning information

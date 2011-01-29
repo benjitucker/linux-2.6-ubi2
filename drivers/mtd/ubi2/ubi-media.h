@@ -312,6 +312,10 @@ struct ubi_vid_hdr {
 #define UBI_MAX_VOLUMES 128
 
 /* The maximun number of Peb MAP (pmap) entries */
+/* This is  approximately the max volumes and bad blocks we can track.
+ * TODO - revisit this as this is a farily restrictive limit on the
+ * number of bad blocks.
+ */
 #define UBI_MAX_PMAP 4096
 
 /* The layout volume contains the volume table */
@@ -334,10 +338,10 @@ struct ubi_vid_hdr {
 #define UBI_VOL_NAME_MAX 127
 
 /* Size of the peb map table record */
-#define UBI_PMAP_RECORD_SIZE sizeof(struct ubi_pmap_record)
+#define UBI_PTBL_RECORD_SIZE sizeof(struct ubi_pmap_record)
 
 /* Size of the peb map table record without the ending CRC */
-#define UBI_PMAP_RECORD_SIZE_CRC (UBI_PMAP_RECORD_SIZE - sizeof(__be32))
+#define UBI_PTBL_RECORD_SIZE_CRC (UBI_PMAP_RECORD_SIZE - sizeof(__be32))
 
 /* Size of the volume table record */
 #define UBI_VTBL_RECORD_SIZE sizeof(struct ubi_vtbl_record)

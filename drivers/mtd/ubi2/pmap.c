@@ -68,6 +68,31 @@ void ubi_pmap_free(struct ubi_device *ubi, struct ubi_pmap *pmap)
 }
 
 /**
+ * ubi_pmap_vol_reserved_area - Volume to PEB Range mapping
+ * @vol_id: volume identifier
+ * @first_peb: pointer to return the first PEB for the volume
+ * @last_peb: pointer to return the last PEB for the volume
+ *
+ * Some volumes are grouped into particular blocks of PEBS.
+ * Cueerntly this is only used for the layout volume which needs to occupy
+ * to very first PEBs of the device
+ */
+static void ubi_pmap_vol_reserved_area(int vol_id, int *first_peb, int *last_peb)
+{
+	/* The layout volume is treated specially, as it has to reside in the
+	 * first UBI_LAYOUT_VOLUME_RESERVED_EBS blocks of the device.
+	 */
+	if (vol_id == UBI_LAYOUT_VOLUME_ID) {
+		*first_peb = 0;
+		*last_peb = UBI_LAYOUT_VOLUME_RESERVED_EBS - 1;
+	}
+	else {
+		*first_peb = UBI_LAYOUT_VOLUME_RESERVED_EBS;
+		*last_peb = ubi->peb_count - 1;
+	}
+}
+
+/**
  * ubi_pmap_lookup_pnum - Lookup a PEB number from the PEB map
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure
@@ -84,8 +109,11 @@ int ubi_pmap_lookup_pnum(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 {
 	int pnum;
 	struct ubi_pmap *pmap;
+	int first_peb, last_peb;
 
-	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+	ubi_pmap_vol_reserved_area(vol_id, &first_peb, &last_peb);
+
+	for (pnum = first_peb; pnum <= last_peb; ++pnum) {
 		pmap = &peb_map[pnum];
 		if (pmap->vol_id == vol_id &&
 		    pmap->lnum == lnum && 
@@ -166,31 +194,6 @@ int ubi_pmap_remove(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 #endif
 
 /**
- * ubi_pmap_vol_reserved_area - Volume to PEB Range mapping
- * @vol_id: volume identifier
- * @first_peb: pointer to return the first PEB for the volume
- * @last_peb: pointer to return the last PEB for the volume
- *
- * Some volumes are grouped into particular blocks of PEBS.
- * Cueerntly this is only used for the layout volume which needs to occupy
- * to very first PEBs of the device
- */
-static void ubi_pmap_vol_reserved_area(int vol_id, int *first_peb, int *last_peb)
-{
-	/* The layout volume is treated specially, as it has to reside in the
-	 * first UBI_LAYOUT_VOLUME_RESERVED_EBS blocks of the device.
-	 */
-	if (vol_id == UBI_LAYOUT_VOLUME_ID) {
-		*first_peb = 0;
-		*last_peb = UBI_LAYOUT_VOLUME_RESERVED_EBS - 1;
-	}
-	else {
-		*first_peb = UBI_LAYOUT_VOLUME_RESERVED_EBS;
-		*last_peb = ubi->peb_count - 1;
-	}
-}
-
-/**
  * ubi_pmap_resize_volume - Increase or decrease the size of a volume
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure
@@ -213,10 +216,11 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 	struct ubi_pmap *pmap;
 	int first_peb, last_peb;
 
+	ubi_pmap_vol_reserved_area(vol_id, &first_peb, &last_peb);
 
 	/* If the new size is zero, delete all mappings for the volume */
 	if (reserved_pebs == 0) {
-		for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+		for (pnum = first_peb; pnum <= last_peb; ++pnum) {
 			pmap = &peb_map[pnum];
 			if (pmap->vol_id == vol_id) {
 				memset(pmap, 0, sizeof(struct ubi_pmap));
@@ -226,7 +230,7 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		return 0;
 	}
 
-	for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+	for (pnum = first_peb; pnum <= last_peb; ++pnum) {
 		pmap = &peb_map[pnum];
 		if (pmap->vol_id == vol_id &&
 		    pmap->inuse &&
@@ -239,7 +243,7 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 
 	/* if the size has increased, add more */
 	if (lnum < reserved_pebs) {
-		for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+		for (pnum = first_peb; pnum <= last_peb; ++pnum) {
 			pmap = &peb_map[pnum];
 			if (!pmap->inuse && !pmap->bad) {
 
@@ -265,7 +269,7 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 	 */
 #if 0
 	if (lnum > reserved_pebs) {
-		for (pnum = 0; pnum < ubi->peb_count; ++pnum) {
+		for (pnum = first_peb; pnum <= last_peb; ++pnum) {
 			pmap = &peb_map[pnum];
 			if (pmap->vol_id == vol_id &&
 				pmap->inuse &&
@@ -294,9 +298,10 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
  * @peb_map: PEB Map data structure
  * @pnum: physical eraseblock number
  *
- * This function marks a peb as bad. If the PEB is in use it is replaced by another unused 
- * one.
- * Returns the replacement peb number, pnum if not replaced or negitive error code.
+ * This function marks a peb as bad. If the PEB is in use it is replaced by 
+ * another unused one.
+ * Returns the replacement peb number, pnum if not replaced or negitive error
+ * code.
  */
 
 int ubi_pmap_markbad_replace(struct ubi_device *ubi, struct ubi_pmap *peb_map,
@@ -307,6 +312,7 @@ int ubi_pmap_markbad_replace(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 	int replacment_pnum, lnum = 0;
 	int vol_id;
 	int need_replacment = 0;
+	int first_peb, last_peb;
 
 	if (pmap->inuse && !pmap->bad)
 	{
@@ -315,10 +321,13 @@ int ubi_pmap_markbad_replace(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 
 	pmap->bad = 1;
 	
+	ubi_pmap_vol_reserved_area(pmap->vol_id, &first_peb, &last_peb);
+
 	if (need_replacment) 
 	{
 		/* Search for a replacment */
-		for (replacment_pnum = 0; replacment_pnum < ubi->peb_count; ++replacment_pnum) {
+		for (replacment_pnum = first_peb; 
+			replacment_pnum <= last_peb; ++replacment_pnum) {
 			replacment_pmap = &peb_map[replacment_pnum];
 			if (!replacment_pmap->inuse && !replacment_pmap->bad) {
 

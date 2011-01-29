@@ -410,7 +410,7 @@ struct ubi_vtbl_record {
  * @leb the leb number at the start of the range
  * @num the number of blocks in this mapping range
  * @vol_id of the volume that owns the range.
- * @flags UBI_PEB_INUSE if the peb is not used in any volume
+ * @flags UBI_PEB_INUSE if the leb range is used in a volume
  * 	  UBI_PEB_BAD if it is a bad PEB and should not be used
  * The pmap_records are arranged in increasing order of PEB. 
  * The UBI_MAP_PMAP limits the number of bad blocks that can be handled

@@ -849,6 +849,8 @@ static int init_volumes(struct ubi_device *ubi,
 	__be32  vol_id;
 	__u8    flags;
 	__be32  crc;
+
+		ubi_pmap_allocate_volume
 	}
 
 	/* Process the volume table */

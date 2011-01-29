@@ -194,6 +194,67 @@ int ubi_pmap_remove(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 #endif
 
 /**
+ * ubi_pmap_allocate_volume - Allocate PEBs to an volume volume
+ * @ubi: UBI device description object
+ * @peb_map: PEB Map data structure
+ * @vol_id: volume identifier
+ * @peb: The first PEB number in a range to be allocated to the volume
+ * @leb: The first LEB number in a range to be allocated to the volume
+ * @blocks: The number of blocks to add
+ * @bad: Bad PEB flag
+ *
+ * This function adds PEBs associated with a volume.
+ * A range of blocks is added which have consectuve PEB and LEB numbers.
+ */
+int ubi_pmap_allocate_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
+		 	   int vol_id, int peb, int leb, int blocks, int bad)
+{
+	int i;
+	struct ubi_pmap *pmap;
+	int first_peb, last_peb;
+
+	ubi_pmap_vol_reserved_area(vol_id, &first_peb, &last_peb);
+
+	/* Check that the range is within the bounds of that allowed for the
+	 * volume.
+	 */
+	if (peb < first_peb || (peb + blocks) > (last_peb + 1)) {
+		ubi_err("blocks allocated outside area perscribed for "
+			"vol_id %d", vol_id);
+		return -EINVAL;
+	}
+
+	/* Check that the range is not already allocated */
+	for (i = 0; i < blocks; ++i) {
+		pmap = &peb_map[peb + i];
+		if ((pmap->vol_id == vol_id) && 
+			pmap->inuse) {
+
+			ubi_err("block already allocated vol_id %d peb %d",
+				 vol_id, peb + i);
+			return -EINVAL;
+		}
+	}
+
+	/* Allocate the PEBs to the volume */
+	for (i = 0; i < blocks; ++i) {
+		pmap = &peb_map[peb + i];
+		pmap->vol_id = vol_id;
+		pmap->lnum = leb + i;
+		if (!bad) {
+			pmap->inuse = 1;
+			pmap->bad = 0;
+		}
+		else {
+			pmap->inuse = 0;
+			pmap->bad = 1;
+		}
+	}
+
+	return 0;
+}
+
+/**
  * ubi_pmap_resize_volume - Increase or decrease the size of a volume
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure
@@ -207,7 +268,8 @@ int ubi_pmap_remove(struct ubi_device *ubi, struct ubi_pmap *peb_map,
  */
 /* TODO - No, wrong. We need to cope with bad blocks appearing in volumes
  * 	  which would cause the lebs to be out of order wrt pebs.
- *  Surely we need to remove LEBS that are unmapped!
+ *  When reducing the volume size, surely we need to remove LEBS that are 
+ * unmapped!
  */
 int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		 	   int vol_id, int reserved_pebs)
@@ -320,6 +382,7 @@ int ubi_pmap_markbad_replace(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 	}
 
 	pmap->bad = 1;
+	pmap->inuse = 0;
 	
 	ubi_pmap_vol_reserved_area(pmap->vol_id, &first_peb, &last_peb);
 

@@ -196,6 +196,64 @@ int ubi_pmap_number_vols(struct ubi_device *ubi, struct ubi_pmap *peb_map)
 }
 
 /**
+ * ubi_pmap_extract_vol_pebs - Extract the PEBs allocated to a volumes
+ * @ubi: UBI device description object
+ * @peb_map: PEB Map data structure
+ * @vol_pebs_cb: Function pointer called back with each of the ranges
+ * @usr_ptr: Pointer passed to the vol_pebs_cb
+ *
+ * This function extracts PEBs associated with volumes. Each contiguous range
+ * of pebs is returned to the caller in the vol_pebs_cb callback.
+ * Returns zero on success or negitive error code on failure
+ */
+int ubi_pmap_extract_vol_pebs(struct ubi_device *ubi, struct ubi_pmap *peb_map,
+	int (*vol_pebs_cb)(struct ubi_device *ubi, void *usr_ptr, int vol_id, 
+				int peb, int leb, int blocks, int bad), 
+			void *usr_ptr)
+		
+{
+	int err;
+	int i, block_first_idx;
+	struct ubi_pmap *pmap, block_first_pmap = NULL;
+
+	for (i = 0; i < ubi->peb_count; i++) {
+		pmap = &peb_map[i];
+		
+		if (block_first_pmap == NULL) {
+			if (pmap->inuse) {
+				block_first_pmap = pmap;
+				block_first_idx = i;
+			}
+			continue;
+		}
+
+		if (!pmap->inuse ||
+			pmap->vol_id != block_first_pmap->vol_id ||
+			pmap->bad != block_first_pmap->bad ||
+			pmap->lnum != block_first_pmap->lnum + 
+					i - block_first_idx) {
+			
+			err = vol_pebs_cb(ubi, usr_ptr, 
+				block_first_pmap->vol_id, block_first_idx,
+				block_first_pmap->lnum, i - block_first_idx,
+				block_first_pmap->bad);
+			if (err)
+				return err;
+
+			if (pmap->inuse) {
+				block_first_pmap = pmap;
+				block_first_idx = i;
+			}
+			else {
+				block_first_pmap = NULL;
+			}
+		}
+	}
+
+	return 0;
+}
+
+/**
  * ubi_pmap_allocate_vol_pebs - Allocate PEBs to a volume
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure
@@ -271,9 +329,9 @@ int ubi_pmap_allocate_vol_pebs(struct ubi_device *ubi, struct ubi_pmap *peb_map,
  */
 /* TODO - No, wrong. We need to cope with bad blocks appearing in volumes
  * 	  which would cause the lebs to be out of order wrt pebs.
- *  When reducing the volume size, surely we need to remove LEBS that are 
- * unmapped!
  *		NO Problem! we now have the Peb Map.
+ * When reducing the volume size, surely we need to remove LEBS that are 
+ * unmapped! (ANSWER: The calling code will ensure they are unmapped)
  */
 int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		 	   int vol_id, int reserved_pebs)
@@ -401,7 +459,6 @@ int ubi_pmap_markbad_replace(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 				replacment_pmap->inuse = 1;
 				replacment_pmap->vol_id = pmap->vol_id;
 				replacment_pmap->lnum = pmap->lnum;
-			//	pmap->mapped = 0;	TODO - handling mapped LEBs
 				return replacment_pnum;
 			}
 		}

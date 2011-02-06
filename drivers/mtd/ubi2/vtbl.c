@@ -830,28 +830,53 @@ static int init_volumes(struct ubi_device *ubi,
 {
 	int i, reserved_pebs = 0;
 	struct ubi_volume *vol;
+    int peb, leb, num_blocks, vol_id;
+    int err;
 
 	/* Process the PEB Map table */
+    
+    ubi->good_peb_count = 0;
+    ubi->corr_peb_count = 0;
+    ubi->bad_peb_count = 0;
 	for (i = 0; i < ubi->pmap_slots; i++) {
 		
-		if (be32_to_cpu(ptbl[i].num) == 0)
+		num_blocks = be32_to_cpu(ptbl[i].num);
+
+		if (num_blocks == 0)
 			continue; /* Empty record */
 		
-		/* Skip the layout volume as we have found where it is 
-		 * located already
-		 */
-		if (be32_to_cpu(ptbl[i].vol_id) == UBI_LAYOUT_VOLUME_ID)
-			continue;
+        /* Process records that are in use */
+        if (ptbl[i].flags & UBI_PEB_INUSE) {
 
-	__be32  peb;
-	__be32  leb;
-	__be32  num;
-	__be32  vol_id;
-	__u8    flags;
-	__be32  crc;
+            peb = be32_to_cpu(ptbl[i].peb);
+            leb = be32_to_cpu(ptbl[i].leb);
+            vol_id = be32_to_cpu(ptbl[i].vol_id);
 
-		ubi_pmap_allocate_volume
+            /* Skip the layout volume as we have found where it is 
+             * located already
+             */
+            if (be32_to_cpu(ptbl[i].vol_id) != UBI_LAYOUT_VOLUME_ID) {
+
+                err = ubi_pmap_allocate_volume(
+                        ubi, ubi->peb_map, vol_id, peb, leb, num_blocks, 
+                        ptbl[i].flags & UBI_PEB_BAD);
+
+                if (err < 0) {
+                    return err;
+                }
+            }
+        }
+
+        /* Count good and bad pebs */
+        if (ptbl[i].flags & UBI_PEB_BAD) {
+            ubi->bad_peb_count += num_blocks;
+        }
+        else {
+            ubi->good_peb_count += num_blocks;
+        }
 	}
+
+	ubi->avail_pebs = ubi->good_peb_count - ubi->corr_peb_count;
 
 	/* Process the volume table */
 
@@ -1053,7 +1078,11 @@ static int init_layout_volume(struct ubi_device *ubi)
 			return err;
 		else if (err) {
 			err = ubi_pmap_markbad_replace(ubi, ubi->peb_map, pnum);
-			/* TODO - deal with error code */
+            if (err < 0) {
+                ubi_err("Unable to find replacment for bad "
+                        "layout volume block");
+                break;
+            }
 		}
 		else {
 			lnum++;
@@ -1067,27 +1096,30 @@ static int init_layout_volume(struct ubi_device *ubi)
 }
 
 /**
- * check_sv - check volume scanning information.
+ * check_pmap - check volume pmap information.
  * @vol: UBI volume description object
- * @sv: volume scanning information
+ * @vol_id: volume identifier
  *
- * This function returns zero if the volume scanning information is consistent
+ * This function returns zero if the volume pmap information is consistent
  * to the data read from the volume tabla, and %-EINVAL if not.
  */
-#if 0	// TODO - remove
-static int check_sv(const struct ubi_volume *vol,
-		    const struct ubi_scan_volume *sv)
+static int check_pmap(const struct ubi_device *ubi, const struct ubi_volume *vol, int vol_id)
 {
 	int err;
+	int i;
 
+#if 0
 	if (sv->highest_lnum >= vol->reserved_pebs) {
 		err = 1;
 		goto bad;
 	}
-	if (sv->leb_count > vol->reserved_pebs) {
+#endif
+	if (ubi_pmap_vol_peb_count(ubi, ubi->peb_map, vol_id) != 
+		vol->reserved_pebs) {
 		err = 2;
 		goto bad;
 	}
+#if 0
 	if (sv->vol_type != vol->vol_type) {
 		err = 3;
 		goto bad;
@@ -1100,75 +1132,84 @@ static int check_sv(const struct ubi_volume *vol,
 		err = 5;
 		goto bad;
 	}
+#endif
+
+	for (i = 0; i < vol->reserved_pebs; i++) {
+		if (ubi_pmap_lookup_pnum(
+			ubi, ubi->peb_map, vol_id, i) < 0) {
+			err = 7;
+			goto bad;
+		}
+	}
+
 	return 0;
 
 bad:
-	ubi_err("bad scanning information, error %d", err);
-	ubi_dbg_dump_sv(sv);
+	ubi_err("bad pmap information, error %d", err);
 	ubi_dbg_dump_vol_info(vol);
 	return -EINVAL;
 }
-#endif
 
 /**
- * check_scanning_info - check that scanning information.
+ * check_volume_pmap - check that volumes match the peb map.
  * @ubi: UBI device description object
- * @si: scanning information
  *
  * Even though we protect on-flash data by CRC checksums, we still don't trust
- * the media. This function ensures that scanning information is consistent to
- * the information read from the volume table. Returns zero if the scanning
+ * the media. This function ensures that pmap information is consistent to
+ * the information read from the volume table. Returns zero if the peb map
  * information is OK and %-EINVAL if it is not.
  */
-#if 0	// TODO - remove
-static int check_scanning_info(const struct ubi_device *ubi,
-			       struct ubi_scan_info *si)
+static int check_volume_pmap(const struct ubi_device *ubi)
 {
 	int err, i;
-	struct ubi_scan_volume *sv;
 	struct ubi_volume *vol;
+	int peb_count;
 
-	if (si->vols_found > UBI_INT_VOL_COUNT + ubi->vtbl_slots) {
-		ubi_err("scanning found %d volumes, maximum is %d + %d",
+	if (ubi_pmap_number_vols(ubi, ubi->peb_map) > 
+            UBI_INT_VOL_COUNT + ubi->vtbl_slots) {
+		ubi_err("pmap has %d volumes, maximum is %d + %d",
 			si->vols_found, UBI_INT_VOL_COUNT, ubi->vtbl_slots);
 		return -EINVAL;
 	}
 
+#if 0
 	if (si->highest_vol_id >= ubi->vtbl_slots + UBI_INT_VOL_COUNT &&
 	    si->highest_vol_id < UBI_INTERNAL_VOL_START) {
 		ubi_err("too large volume ID %d found by scanning",
 			si->highest_vol_id);
 		return -EINVAL;
 	}
+#endif
 
 	for (i = 0; i < ubi->vtbl_slots + UBI_INT_VOL_COUNT; i++) {
 		cond_resched();
 
-		sv = ubi_scan_find_sv(si, i);
+		peb_count = ubi_pmap_vol_peb_count(ubi, ubi->peb_map, i);
 		vol = ubi->volumes[i];
 		if (!vol) {
-			if (sv)
-				ubi_scan_rm_volume(si, sv);
+			if (peb_count)
+				ubi_pmap_resize_volume(
+					ubi, ubi->peb_map, i, 0);
 			continue;
 		}
 
 		if (vol->reserved_pebs == 0) {
 			ubi_assert(i < ubi->vtbl_slots);
 
-			if (!sv)
+			if (!peb_count)
 				continue;
 
 			/*
-			 * During scanning we found a volume which does not
+			 * We found a volume in the pmap which does not
 			 * exist according to the information in the volume
 			 * table. This must have happened due to an unclean
 			 * reboot while the volume was being removed. Discard
 			 * these eraseblocks.
 			 */
-			ubi_msg("finish volume %d removal", sv->vol_id);
-			ubi_scan_rm_volume(si, sv);
-		} else if (sv) {
-			err = check_sv(vol, sv);
+			ubi_msg("finish volume %d removal", i);
+			ubi_pmap_resize_volume(ubi, ubi->peb_map, i, 0);
+		} else if (peb_count) {
+			err = check_pmap(ubi, vol, i);
 			if (err)
 				return err;
 		}
@@ -1176,7 +1217,6 @@ static int check_scanning_info(const struct ubi_device *ubi,
 
 	return 0;
 }
-#endif
 
 /**
  * ubi_read_volume_table - read the volume table.
@@ -1273,28 +1313,22 @@ int ubi_read_volume_table(struct ubi_device *ubi)
 			goto out_free;
 	}
 
-	ubi->avail_pebs = ubi->good_peb_count - ubi->corr_peb_count;
-
-	// TODO - Process the pmap volume and build the ubi->peb_map
 
 	/*
-	 * The layout volume is OK, initialize the corresponding in-RAM data
-	 * structures.
+	 * The layout volume including peb map is OK, initialize the 
+	 * corresponding in-RAM data structures.
 	 */
 	err = init_volumes(ubi, ubi->vtbl, ubi->ptbl);
 	if (err)
 		goto out_free;
 
-#if 0	// TODO - We need to do something equivelent, but I am not sure what,
-	//		given that the LEBs have no info on their volume
 	/*
-	 * Make sure that the scanning information is consistent to the
+	 * Make sure that the pmap information is consistent to the
 	 * information stored in the volume table.
 	 */
-	err = check_scanning_info(ubi, si);
+	err = check_volume_pmap(ubi);
 	if (err)
 		goto out_free;
-#endif
 
 	return 0;
 
@@ -1304,6 +1338,7 @@ out_free:
 		kfree(ubi->volumes[i]);
 		ubi->volumes[i] = NULL;
 	}
+	vfree(ubi->ptbl);
 	return err;
 }
 

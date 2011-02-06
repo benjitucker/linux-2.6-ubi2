@@ -55,7 +55,7 @@ struct ubi_pmap *ubi_pmap_init(struct ubi_device *ubi)
 }
 
 /**
- * ubi_pmap_free - Initialise a PEB map
+ * ubi_pmap_free - Initialize a PEB map
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure to be freed
  *
@@ -74,7 +74,7 @@ void ubi_pmap_free(struct ubi_device *ubi, struct ubi_pmap *pmap)
  * @last_peb: pointer to return the last PEB for the volume
  *
  * Some volumes are grouped into particular blocks of PEBS.
- * Cueerntly this is only used for the layout volume which needs to occupy
+ * Currently this is only used for the layout volume which needs to occupy
  * to very first PEBs of the device
  */
 static void ubi_pmap_vol_reserved_area(int vol_id, int *first_peb, int *last_peb)
@@ -90,6 +90,37 @@ static void ubi_pmap_vol_reserved_area(int vol_id, int *first_peb, int *last_peb
 		*first_peb = UBI_LAYOUT_VOLUME_RESERVED_EBS;
 		*last_peb = ubi->peb_count - 1;
 	}
+}
+
+/**
+ * ubi_pmap_vol_size - Find the number of pebs allocated to a volume
+ * @ubi: UBI device description object
+ * @peb_map: PEB Map data structure
+ * @vol: volume description object
+ *
+ * This function returns the volume size in pebs.
+ */
+int ubi_pmap_vol_peb_count(struct ubi_device *ubi, 
+			struct ubi_pmap *peb_map, int vol_id)
+{
+	int pnum;
+	struct ubi_pmap *pmap;
+	int first_peb, last_peb;
+	int number = 0;
+
+	ubi_pmap_vol_reserved_area(vol_id, &first_peb, &last_peb);
+
+	for (pnum = first_peb; pnum <= last_peb; ++pnum) {
+		pmap = &peb_map[pnum];
+		if (pmap->vol_id == vol_id &&
+		    pmap->inuse &&
+		    !pmap->bad) {
+
+		    number++;
+		}
+	}
+
+	return number;
 }
 
 /**
@@ -127,71 +158,42 @@ int ubi_pmap_lookup_pnum(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 	return -1;
 }
 
-#if 0 	// TODO - remove, now handled by resize
-/**
- * ubi_pmap_add - Add a vol/lnum to pnum mapping to the PEB map
- * @ubi: UBI device description object
- * @peb_map: PEB Map data structure
- * @vol_id: volume identifier
- * @lnum: logical eraseblock number
- * @pnum: physical eraseblock number
- *
- * This function adds a mapping between vol/leb to head of list peb.
- * Returns zero on success, UBI_PMAP_INUSE if the peb is already inuse
- * and UBI_PMAP_BAD if the peb is marked bad.
- */
-
-int ubi_pmap_add(struct ubi_device *ubi, struct ubi_pmap *peb_map,
-		 int vol_id, int lnum, int pnum)
-{
-	struct ubi_pmap *pmap = &peb_map[pnum];
-
-	if (pmap->inuse) {
-		return UBI_PMAP_INUSE;
-	}
-
-	if (pmap->bad) {
-		return UBI_PMAP_BAD;
-	}
-
-	pmap->inuse = 1;
-	pmap->vol_id = vol_id;
-	pmap->lnum = lnum;
-
-	return 0;
-}
 
 /**
- * ubi_pmap_remove - Remove a vol/lnum to pnum mapping
+ * ubi_pmap_number_vols - Count the number of volumes we know about
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure
- * @vol_id: volume identifier
- * @lnum: logical eraseblock number
- * @pnum: physical eraseblock number
  *
- * This function removes a mapping between vol/leb to head of list peb.
- * Returns zero on success, UBI_PMAP_NOT_INUSE if the peb is not inuse
- * and UBI_PMAP_BAD if the peb is marked bad.
+ * This returns the number of volumes (unique vol_id's) allocated.
  */
-
-int ubi_pmap_remove(struct ubi_device *ubi, struct ubi_pmap *peb_map,
-		 int vol_id, int lnum, int pnum)
+int ubi_pmap_number_vols(struct ubi_device *ubi, struct ubi_pmap *peb_map)
 {
-	struct ubi_pmap *pmap = &peb_map[pnum];
+    int number = 0;
+    int vol_id = 0;
+    int next_vol_id;
+    int i;
 
-	if (!pmap->inuse) {
-		return UBI_PMAP_NOT_INUSE;
-	}
+    while (true) {
+        next_vol_id = INT_MAX;
+        for (i = 0; i < ubi->peb_count; i++) {
+            if (peb_map[i].inuse && !peb_map[i].bad &&
+                peb_map[i].vol_id > vol_id &&
+                peb_map[i].vol_id < next_vol_id) {
 
-	if (pmap->bad) {
-		return UBI_PMAP_BAD;
-	}
+                next_vol_id < peb_map[i].vol_id;
+            }
+        }
 
-	pmap->inuse = 0;
+        if (next_vol_id == INT_MAX) {
+            break;
+        }
 
-	return 0;
+        number++;
+        vol_id = next_vol_id;
+    }
+
+    return number;
 }
-#endif
 
 /**
  * ubi_pmap_allocate_volume - Allocate PEBs to an volume volume
@@ -204,7 +206,7 @@ int ubi_pmap_remove(struct ubi_device *ubi, struct ubi_pmap *peb_map,
  * @bad: Bad PEB flag
  *
  * This function adds PEBs associated with a volume.
- * A range of blocks is added which have consectuve PEB and LEB numbers.
+ * A range of blocks is added which have consecutive PEB and LEB numbers.
  */
 int ubi_pmap_allocate_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		 	   int vol_id, int peb, int leb, int blocks, int bad)
@@ -219,7 +221,7 @@ int ubi_pmap_allocate_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 	 * volume.
 	 */
 	if (peb < first_peb || (peb + blocks) > (last_peb + 1)) {
-		ubi_err("blocks allocated outside area perscribed for "
+		ubi_err("blocks allocated outside area prescribed for "
 			"vol_id %d", vol_id);
 		return -EINVAL;
 	}

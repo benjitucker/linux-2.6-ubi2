@@ -417,6 +417,10 @@ struct ubi_vtbl_record {
  * by the UBI. When all the pmap_records are used, the UBI layer
  * cannot handle any more bad blocks of volume fragmentation.
  */
+enum {
+	UBI_PEB_INUSE = 1,
+	UBI_PEB_BAD   = 2
+};
 struct ubi_pmap_record {
 	__be32  peb;
 	__be32  leb;

@@ -590,14 +590,16 @@ static int attach_device(struct ubi_device *ubi)
 	
 	// TODO - we do not scan so we do not know the bad peb's
 	//		put this information in the volume table?
-	ubi->bad_peb_count = 0;
+    // Good and Bad peb information is in the volume table (pmap) so 
+    // ubi_read_volume_table will obtain these values
+	//ubi->bad_peb_count = 0;
 
-	ubi->good_peb_count = ubi->peb_count - ubi->bad_peb_count;
+	//ubi->good_peb_count = ubi->peb_count - ubi->bad_peb_count;
 
 	// TODO - we do not scan so we do not know the corrupted peb's
 	//		either. Put this information in the volume table?
 	//ubi->corr_peb_count = si->corr_peb_count;
-	ubi->corr_peb_count = 0;
+	//ubi->corr_peb_count = 0;
 
 	// TODO - we do not keep erase counters, handled differently
 	//ubi->max_ec = si->max_ec;

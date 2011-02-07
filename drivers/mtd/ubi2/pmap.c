@@ -196,7 +196,7 @@ int ubi_pmap_number_vols(struct ubi_device *ubi, struct ubi_pmap *peb_map)
 }
 
 /**
- * ubi_pmap_allocate_volume - Allocate PEBs to an volume volume
+ * ubi_pmap_allocate_vol_pebs - Allocate PEBs to a volume
  * @ubi: UBI device description object
  * @peb_map: PEB Map data structure
  * @vol_id: volume identifier
@@ -208,7 +208,7 @@ int ubi_pmap_number_vols(struct ubi_device *ubi, struct ubi_pmap *peb_map)
  * This function adds PEBs associated with a volume.
  * A range of blocks is added which have consecutive PEB and LEB numbers.
  */
-int ubi_pmap_allocate_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
+int ubi_pmap_allocate_vol_pebs(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		 	   int vol_id, int peb, int leb, int blocks, int bad)
 {
 	int i;
@@ -263,15 +263,17 @@ int ubi_pmap_allocate_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
  * @vol_id: volume identifier
  * @reserved_pebs: The new size of the volume
  *
- * This function adds or removed PEBs associated with a volume.
- * blocks are always added or removed from the end of the logical volume.
- * PEBs chosen are those that are available with the lowest index first.
- * Returns zero on success
+ * This function adds or removed PEBs associated with a volume. It
+ * can also be used to create or remove a volume.
+ * Blocks are always added or removed from the end of the logical volume.
+ * Free with the lowest index PEBs are chosen to be added to the volume.
+ * Returns zero on success when reducing the volume allocation to zero.
  */
 /* TODO - No, wrong. We need to cope with bad blocks appearing in volumes
  * 	  which would cause the lebs to be out of order wrt pebs.
  *  When reducing the volume size, surely we need to remove LEBS that are 
  * unmapped!
+ *		NO Problem! we now have the Peb Map.
  */
 int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		 	   int vol_id, int reserved_pebs)
@@ -314,7 +316,6 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 				pmap->inuse = 1;
 				pmap->vol_id = vol_id;
 				pmap->lnum = lnum;
-			//	pmap->mapped = 0;	TODO - handling mapped LEBs
 
 				/* Count the number of new pebs */
 				lnum++;
@@ -326,19 +327,17 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 		}
 	}
 
-	/* if the size has decreased, remove unmapped blocks */
-	/* TODO - volume reduction is tricky. We have to remove LEBs off of the end
-	 * (highest index) first but what if they are currently mapped??
-	 * Look at the old UBI, how do they handle this??
+	/* if the size has decreased, remove blocks from the
+	 * logical end 
 	 */
-#if 0
 	if (lnum > reserved_pebs) {
-		for (pnum = first_peb; pnum <= last_peb; ++pnum) {
+		pnum = last_peb;
+		while (true) {
 			pmap = &peb_map[pnum];
 			if (pmap->vol_id == vol_id &&
+				pmap->lnum == (lnum - 1) &&
 				pmap->inuse &&
-				!pmap->bad &&
-				!pmap->mapped) {
+				!pmap->bad) {
 
 				/* Count the number of removed pebs */
 				lnum--;
@@ -349,9 +348,12 @@ int ubi_pmap_resize_volume(struct ubi_device *ubi, struct ubi_pmap *peb_map,
 					break;
 				}
 			}
+
+			pnum--;
+			if (pnum < first_peb)
+				pnum = last_peb;
 		}
 	}
-#endif
 	
 	return 0;
 }

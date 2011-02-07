@@ -190,6 +190,7 @@ static void volume_sysfs_close(struct ubi_volume *vol)
 	device_unregister(&vol->dev);
 }
 
+#if 0 /* TODO - remove. This is now handled by the peb mapping system */
 /**
  * free_logical_volume - Shift existing volumes around to free up one.
  * @ubi: UBI device description object
@@ -275,6 +276,7 @@ static int allocate_logical_volume(
 
 	return 0;
 }
+#endif
 
 /**
  * ubi_create_volume - create volume.
@@ -387,9 +389,9 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 		vol->eba_tbl[i] = UBI_LEB_UNMAPPED;
 #endif
 
-	err = allocate_logical_volume(ubi, vol);
+	err = ubi_pmap_resize_volume(ubi, ubi->peb_map, vol_id, vol->reserved_pebs);
 	if (err) {
-		ubi_err("cannot allocate logical volume");
+		ubi_err("cannot allocate volume");
 		goto out_mapping;
 	}
 
@@ -415,7 +417,7 @@ int ubi_create_volume(struct ubi_device *ubi, struct ubi_mkvol_req *req)
 	err = cdev_add(&vol->cdev, dev, 1);
 	if (err) {
 		ubi_err("cannot add character device");
-		goto out_free;
+		goto out_release_pebs;
 	}
 
 	vol->dev.release = vol_release;
@@ -474,8 +476,8 @@ out_sysfs:
 	volume_sysfs_close(vol);
 out_cdev:
 	cdev_del(&vol->cdev);
-out_free:
-	free_logical_volume(ubi, vol);
+out_release_pebs:
+	ubi_pmap_resize_volume(ubi, ubi->peb_map, vol_id, 0);
 out_mapping:
 	if (do_free)
 		kfree(vol->eba_tbl);

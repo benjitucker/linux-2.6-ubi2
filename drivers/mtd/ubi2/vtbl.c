@@ -830,50 +830,52 @@ static int init_volumes(struct ubi_device *ubi,
 {
 	int i, reserved_pebs = 0;
 	struct ubi_volume *vol;
-    int peb, leb, num_blocks, vol_id;
-    int err;
+	int peb, leb, num_blocks, vol_id;
+	int err;
 
 	/* Process the PEB Map table */
     
-    ubi->good_peb_count = 0;
-    ubi->corr_peb_count = 0;
-    ubi->bad_peb_count = 0;
+	ubi->good_peb_count = 0;
+	ubi->corr_peb_count = 0;
+	ubi->bad_peb_count = 0;
 	for (i = 0; i < ubi->pmap_slots; i++) {
-		
+
 		num_blocks = be32_to_cpu(ptbl[i].num);
 
 		if (num_blocks == 0)
 			continue; /* Empty record */
-		
-        /* Process records that are in use */
-        if (ptbl[i].flags & UBI_PEB_INUSE) {
 
-            peb = be32_to_cpu(ptbl[i].peb);
-            leb = be32_to_cpu(ptbl[i].leb);
-            vol_id = be32_to_cpu(ptbl[i].vol_id);
+		/* Process records that are in use */
+		if (ptbl[i].flags & UBI_PEB_INUSE) {
 
-            /* Skip the layout volume as we have found where it is 
-             * located already
-             */
-            if (be32_to_cpu(ptbl[i].vol_id) != UBI_LAYOUT_VOLUME_ID) {
+			peb = be32_to_cpu(ptbl[i].peb);
+			leb = be32_to_cpu(ptbl[i].leb);
+			vol_id = be32_to_cpu(ptbl[i].vol_id);
 
-                err = ubi_pmap_allocate_volume(
-                        ubi, ubi->peb_map, vol_id, peb, leb, num_blocks, 
-                        ptbl[i].flags & UBI_PEB_BAD);
+			/* Skip the layout volume as we have found 
+			 * where it is located already
+			 */
+			if (be32_to_cpu(ptbl[i].vol_id) != 
+				UBI_LAYOUT_VOLUME_ID) {
 
-                if (err < 0) {
-                    return err;
-                }
-            }
-        }
+				err = ubi_pmap_allocate_vol_pebs(
+					ubi, ubi->peb_map, 
+					vol_id, peb, leb, num_blocks, 
+					ptbl[i].flags & UBI_PEB_BAD);
 
-        /* Count good and bad pebs */
-        if (ptbl[i].flags & UBI_PEB_BAD) {
-            ubi->bad_peb_count += num_blocks;
-        }
-        else {
-            ubi->good_peb_count += num_blocks;
-        }
+				if (err < 0) {
+					return err;
+				}
+			}
+		}
+
+		/* Count good and bad pebs */
+		if (ptbl[i].flags & UBI_PEB_BAD) {
+			ubi->bad_peb_count += num_blocks;
+		}
+		else {
+			ubi->good_peb_count += num_blocks;
+		}
 	}
 
 	ubi->avail_pebs = ubi->good_peb_count - ubi->corr_peb_count;
@@ -1350,7 +1352,7 @@ out_free:
  */
 static void paranoid_vtbl_check(const struct ubi_device *ubi)
 {
-	if (vtbl_check(ubi, ubi->vtbl)) {
+	if (vtbl_check(ubi, ubi->vtbl, ubi->ptbl)) {
 		ubi_err("paranoid check failed");
 		BUG();
 	}

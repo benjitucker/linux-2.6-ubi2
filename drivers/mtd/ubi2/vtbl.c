@@ -73,19 +73,18 @@ static struct ubi_vtbl_record empty_vtbl_record;
 static struct ubi_vtbl_record empty_pmap_record;
 
 /**
- * ubi_change_ptbl - change peb_map table.
+ * ubi_change_vtbl_record - change volume table record and update ptbl.
  * @ubi: UBI device description object
  * @idx: table index to change
  * @vtbl_rec: new volume table record
  *
- * This function changes volume mapping table the reflect the current state of
- * the 'in ram' peb_map. When changing a volume size, the caller must allocate
- * blocks the the volume by calling pmap allocate or similar before calling
- * this function to commit the changes to flash.
- * Returns zero in case of success and a negative error code in case of 
- * failure.
+ * This function changes volume table record @idx and also the volume table peb 
+ * map. If @vtbl_rec is %NULL, empty volume table record is written. The caller
+ * does not have to calculate CRC of the record as it is done by this function. 
+ * Returns zero in case of success and a negative error code in case of failure.
  */
-int ubi_change_ptbl(struct ubi_device *ubi)
+int ubi_change_vtbl_record(struct ubi_device *ubi, int idx,
+			   struct ubi_vtbl_record *vtbl_rec)
 {
 	int i, leb, err;
 	uint32_t crc;
@@ -118,6 +117,7 @@ int ubi_change_ptbl(struct ubi_device *ubi)
 		return 0;
 	}
 
+	ubi_assert(idx >= 0 && idx < ubi->vtbl_slots);
 	layout_vol = ubi->volumes[vol_id2idx(ubi, UBI_LAYOUT_VOLUME_ID)];
 
 	/* process the peb map to populate the ptbl */
@@ -132,62 +132,6 @@ int ubi_change_ptbl(struct ubi_device *ubi)
 		memcpy(&ubi->ptbl[ptbl_idx], empty_ptbl_record, 
 			sizeof(struct ubi_ptbl_record));
 	}
-	
-	/* Update both copies of the pmap table */
-	for (i = 0; i < UBI_LAYOUT_VOLUME_COPIES; i++) {
-
-		/* The pmap resides in the second leb of each copy of the
-		 * volume.
-		 */
-		leb = (i * UBI_LAYOUT_VOLUME_EBS_PER_COPY) + 1;
-
-		/* Write the pmap contents */
-		err = ubi_eba_unmap_leb(ubi, layout_vol, leb);
-		if (err)
-			return err;
-
-		err = ubi_eba_write_leb(ubi, layout_vol, leb, ubi->ptbl, 0, 
-				ubi->ptbl_size, UBI_LONGTERM);
-		if (err)
-			return err;
-
-
-#if 0
-		err = ubi_eba_unmap_leb(ubi, layout_vol, i);
-		if (err)
-			return err;
-
-		err = ubi_eba_write_leb(ubi, layout_vol, i, ubi->vtbl, 0,
-				ubi->vtbl_size, UBI_LONGTERM);
-		if (err)
-			return err;
-#endif
-	}
-
-	paranoid_vtbl_check(ubi);
-	return 0;
-}
-
-/**
- * ubi_change_vtbl_record - change volume table record.
- * @ubi: UBI device description object
- * @idx: table index to change
- * @vtbl_rec: new volume table record
- *
- * This function changes volume table record @idx. If @vtbl_rec is %NULL, empty
- * volume table record is written. The caller does not have to calculate CRC of
- * the record as it is done by this function. Returns zero in case of success
- * and a negative error code in case of failure.
- */
-int ubi_change_vtbl_record(struct ubi_device *ubi, int idx,
-			   struct ubi_vtbl_record *vtbl_rec)
-{
-	int i, err;
-	uint32_t crc;
-	struct ubi_volume *layout_vol;
-
-	ubi_assert(idx >= 0 && idx < ubi->vtbl_slots);
-	layout_vol = ubi->volumes[vol_id2idx(ubi, UBI_LAYOUT_VOLUME_ID)];
 
 	if (!vtbl_rec)
 		vtbl_rec = &empty_vtbl_record;
@@ -197,13 +141,34 @@ int ubi_change_vtbl_record(struct ubi_device *ubi, int idx,
 	}
 
 	memcpy(&ubi->vtbl[idx], vtbl_rec, sizeof(struct ubi_vtbl_record));
-	for (i = 0; i < UBI_LAYOUT_VOLUME_EBS; i++) {
-		err = ubi_eba_unmap_leb(ubi, layout_vol, i);
+
+	/* Write the updated vtbl and ptbl to the layout volume */
+	for (i = 0; i < UBI_LAYOUT_VOLUME_COPIES; i++) {
+
+		leb = (i * UBI_LAYOUT_VOLUME_EBS_PER_COPY);
+
+		/* Write the vtbl contents */
+		err = ubi_eba_unmap_leb(ubi, layout_vol, leb);
 		if (err)
 			return err;
 
-		err = ubi_eba_write_leb(ubi, layout_vol, i, ubi->vtbl, 0,
-					ubi->vtbl_size, UBI_LONGTERM);
+		err = ubi_eba_write_leb(ubi, layout_vol, leb, ubi->vtbl, 0, 
+				ubi->vtbl_size, UBI_LONGTERM);
+		if (err)
+			return err;
+
+		/* The pmap resides in the second leb of each copy of the
+		 * volume.
+		 */
+		leb++;
+
+		/* Write the ptbl contents */
+		err = ubi_eba_unmap_leb(ubi, layout_vol, leb);
+		if (err)
+			return err;
+
+		err = ubi_eba_write_leb(ubi, layout_vol, leb, ubi->ptbl, 0, 
+				ubi->ptbl_size, UBI_LONGTERM);
 		if (err)
 			return err;
 	}

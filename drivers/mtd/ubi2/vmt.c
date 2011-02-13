@@ -505,8 +505,6 @@ out_unlock:
  * code in case of failure. The caller has to have the @ubi->device_mutex
  * locked.
  */
-// TODO - need to put the dleb_offset of volumes in the on-flash volume data
-//and deal with removal (thus logical device volume holes).
 int ubi_remove_volume(struct ubi_volume_desc *desc, int no_vtbl)
 {
 	struct ubi_volume *vol = desc->vol;
@@ -533,12 +531,17 @@ int ubi_remove_volume(struct ubi_volume_desc *desc, int no_vtbl)
 	spin_unlock(&ubi->volumes_lock);
 
 	if (!no_vtbl) {
+		err = ubi_pmap_resize_volume(ubi, ubi->peb_map, vol_id, 0);
+		if (err)
+			goto out_err;
+
 		err = ubi_change_vtbl_record(ubi, vol_id, NULL);
 		if (err)
 			goto out_err;
 	}
 
 	for (i = 0; i < vol->reserved_pebs; i++) {
+		// TODO - this will fail as we have removed the volume already
 		err = ubi_eba_erase_leb(ubi, vol, i);
 		if (err)
 			goto out_err;

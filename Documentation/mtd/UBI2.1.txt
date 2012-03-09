@@ -1,0 +1,203 @@
+
+
+Design goals
+============
+
+- Fast, near zero UBI attach time
+- Safe when power is unexpectedly removed.
+- Minimise read disturbance (which helps with MLC flash)
+
+
+Approach
+========
+
+UBI currently maintains a Logical to Physical Erase Block (LEB to PEB)
+mapping table (LEBMAP) in RAM. This table has to be built at attach time
+by scanning the erase blocks of the device.
+
+Each erase block of the device (PEB) has the first page assigned to PEB header
+structure.
+
+The approach to speeding up the attach time is to remove the need for scanning
+of the PEBs.
+To achieve this, each PEB holds an offset to another PEB which has the payload
+(user data) for the PEB (Payload PEB or PPEB). The offset to always a +ve
+number of PEBs from the current one (and also wraps at the end of the flash).
+
+This is not an erase block chaining scheme as there is only ever a single link 
+between PEB and PPEB.
+
+UBI2 uses a two step process to find the payload (user data) associated with
+a Logical Erase Block (LEB).
+Step 1: As UBI, the LEB number to translated to the PEB number through the 
+	Erase Block Association (EBA) table.
+Step 2: The PEB Payload Offset (PPO) is read from the PEB. The offset is 
+	applied to the PEB number to find the PPEB containing the user data. 
+	(Note that the PPO data may be cached avoiding additional page read).
+
+The PEB Payload Offset (PPO) allows wear leveling of the flash without having
+to update mapping between LEB and PEB through the EBA table. EBA need only ever 
+be updated when changing partitions or recording new bad blocks. This allows the
+EBA to be stored in flash where it can be read at attach time, avoiding the need
+to scan and build this table.
+
+The PPO needs to be updated every time the location of the payload changes. We
+rely on the ability to do multiple writes to flash pages without erasure to
+avoiding having to erase between each write (write amplification). Multi-writes
+are dangerous and are only used in this one special situation.
+
+The PPO is implemented as a bitfield, each set of 8 bits (byte) indicating a +1
+PPO offset.
+
+E.g. if the PPO page has the following content to indicate a +5 offset:
+0x00 0x00 0x00 0x00 0x00 0xff 0xff 0xff..........
+
+The other thing to say is that the PPO would normally only ever increase. So
+if the payload of the PEB moved from +5 to +7 the PPO page is updated to:
+0x00 0x00 0x00 0x00 0x00 0x00 0x00 0xff..........
+
+This update from +5 to +7 is done by setting bits of flash memory from 1 -> 0
+only and so can be achieved by writing the page without erasure.
+
+Using Multi-writes will break ECC for the page. The flash driver layer needs to
+allow reading of pages where the ECC data is incorrect.
+
+A whole byte (8 bits) of flash is chosen to represent each PPO increment
+so that the system is resilient to bit errors. In the above example, if the
+PPO data had a single bit error, this can be discarded as the other bits of
+byte will provide strong indication that this is a bit error.
+Eg:
+0x00 0x00 0x40 0x00 0x00 0x00 0x00 0xff..........
+
+PPO byte values can be categorized:
+	0x00 ->	Read zero
+
+	0x01, 02, 04, 08, 10, 20, 40, 80 ->	
+			One bit set assume bit error and value is zero
+
+	0x03, 0x06 (all other combinations of two bits)	-> 
+			Unlikely 2 bit errors but still assume value zero
+
+	(all combinations of 3, 4, 5 and 6 bits set) -> 
+			ERROR, invalid PPO data. It is thought that the likelihood
+			that we have 3 bit errors in a byte is two large. The
+			PEB needs to be torture tested and possible marked bad.
+
+	0xfc, 0xf9 (all other combinations of 7 bits set) ->
+			Unlikely 2 bit errors but still assume value one
+
+	0xfe, fd, fb, f7, ef, df, bf, 7f ->	
+			7 bits set assume bit error and value is one
+
+	0xff ->	Read one
+
+One whole flash page is dedicated to the PPO. This is very inefficient
+(but the simplest solution until someone comes up with a better scheme).
+
+
+PPEB ejection
+=============
+The flash page is unlikely to be large enough to hold a PPO for offset 
+anywhere in the flash. For example, a 512byte page flash will allow PPO
+values up to +512. When the flash is nearing capacity the situation
+will arise where there is a PPEB available that can hold the payload but
+it is out of reach (in our example more than 512 blocks away). In this 
+situation another PPEB has to be moved (PPEB ejection).
+TODO...
+
+
+PPO Reset
+=========
+The PPO value can only ever increase, due to the fundamental nature of
+flash only able to set 1's to 0's. This means that after successive writes
+to a PEB, necessitating PPEB moves, eventually the PPO value will be
+incremented to its maximum value. When this happens, the PPO data must be
+erased to reset the counter. As the entire PEB must be erased and remembering
+that the PEB may be acting as the PPEB for a different PEB (holding the
+payload of a different PEB), the payload may first need to be moved.
+This requires updating another PPO of a different PEB. Once we know that
+the PEB does not hold active payload, the PEB can be erased. Once erased, the
+PEB can be used to hold its own payload, the PPO will automatically have
+a value of zero when the PEB is erased.
+
+Example: PEB 10 has payload in PEB 13 which in turn has payload in PEB524
+
+	PEB10
+  ---------------------------
+ | PPO +3  |  Payload PPEB?  |
+  ---------------------------
+
+	PEB13
+  ---------------------------
+ | PPO +511|  Payload PPEB10 |
+  ---------------------------
+
+	PEB14
+  ---------------------------
+ | PPO +?? | Payload  FREE   |
+  ---------------------------
+
+	PEB524
+  ---------------------------
+ | PPO +?? | Payload PPEB13  |
+  ---------------------------
+
+Write to PEB 13 causes the PPO in PEB 13 to reset (max PPO is 512 in this example).
+ First PEB 10's payload is moved to a free PEB:
+
+	PEB10
+  ---------------------------
+ | PPO +4  | Payload  PPEB?  |
+  ---------------------------
+
+	PEB13
+  ---------------------------
+ | PPO +511| Payload  FREE   |
+  ---------------------------
+
+	PEB14
+  ---------------------------
+ | PPO +?? | Payload PPEB10  |
+  ---------------------------
+
+	PEB524
+  ---------------------------
+ | PPO +?? | Payload PPEB13  |
+  ---------------------------
+
+ Then erase PEB 13 and move its payload to itself:
+
+	PEB10
+  ---------------------------
+ | PPO +4  | Payload  PPEB?  |
+  ---------------------------
+
+	PEB13
+  ---------------------------
+ | PPO +0  | Payload PPEB13  |
+  ---------------------------
+
+	PEB14
+  ---------------------------
+ | PPO +?? | Payload PPEB10  |
+  ---------------------------
+
+	PEB524
+  ---------------------------
+ | PPO +?? | Payload  FREE   |
+  ---------------------------
+
+
+Bad Blocks
+==========
+
+TODO
+
+Flash Image
+===========
+
+TODO - Erase all PPO's and put payload into PEB's
+
+
+
+

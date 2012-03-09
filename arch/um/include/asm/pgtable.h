@@ -366,4 +366,11 @@ do {						\
 	__flush_tlb_one((vaddr));		\
 } while (0)
 
+/*
+ * remap a physical page `pfn' of size `size' with page protection `prot'
+ * into virtual address `from'
+ */
+#define io_remap_pfn_range(vma,from,pfn,size,prot) \
+		remap_pfn_range(vma, from, pfn, size, prot)
+
 #endif
